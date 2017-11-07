@@ -167,10 +167,10 @@ class ViewResponseHandler(GenericZendeskResponseHandler):
         else:
             return deserialized_response['view']
 
-    def build(self, response):
+    def build(self, response, **kwargs):
         response_json = response.json()
         if any([key in response_json for key in ['rows', 'view_counts', 'tickets']]):
-            return ViewResultGenerator(self, response_json)
+            return ViewResultGenerator(self, response_json, **kwargs)
         else:
             return self.deserialize(response_json)
 

@@ -78,12 +78,18 @@ class BaseApi(object):
         response = self._call_api(self.session.delete, url, json=payload, timeout=self.timeout)
         return self._process_response(response)
 
-    def _get(self, url, raw_response=False):
-        response = self._call_api(self.session.get, url, timeout=self.timeout)
+    def _get(self, url, raw_response=False, **kwargs):
+        if kwargs:
+            params = '&'.join("%s=%r" % (key, val) for key, val in kwargs.iteritems() if val)
+            url = '?'.join([url, params])
+            response = self._call_api(self.session.get, url, timeout=self.timeout)
+        else:
+            response = self._call_api(self.session.get, url, timeout=self.timeout)
+
         if raw_response:
             return response
         else:
-            return self._process_response(response)
+            return self._process_response(response, **kwargs)
 
     def _call_api(self, http_method, url, **kwargs):
         """
@@ -162,7 +168,7 @@ class BaseApi(object):
             self.callsafety['lastcalltime'] = time()
             self.callsafety['lastlimitremaining'] = int(response.headers.get('X-Rate-Limit-Remaining', 0))
 
-    def _process_response(self, response):
+    def _process_response(self, response, **kwargs):
         """
         Attempt to find a ResponseHandler that knows how to process this response.
         If no handler can be found, raise an Exception.
@@ -174,7 +180,11 @@ class BaseApi(object):
         for handler in self._response_handlers:
             if handler.applies_to(self, response):
                 log.debug("{} matched: {}".format(handler.__name__, pretty_response))
+                if handler.__name__ == 'ViewResponseHandler':
+                    return handler(self).build(response, **kwargs)
+
                 return handler(self).build(response)
+
         raise ZenpyException("Could not handle response: {}".format(pretty_response))
 
     def _serialize(self, zenpy_object):
@@ -1022,7 +1032,7 @@ class ViewApi(CRUDApi):
             view = view.id
         return self._get(self._build_url(self.endpoint.execute(id=view)))
 
-    def tickets(self, view):
+    def tickets(self, view, **kwargs):
         """
         Return the tickets in a view.
 
@@ -1030,7 +1040,7 @@ class ViewApi(CRUDApi):
         """
         if isinstance(view, View):
             view = view.id
-        return self._get(self._build_url(self.endpoint.tickets(id=view)))
+        return self._get(self._build_url(self.endpoint.tickets(id=view)), **kwargs)
 
     def count(self, view):
         """
@@ -1209,7 +1219,7 @@ class ChatApi(ChatApiBase):
 class NpsApi(Api):
     def __init__(self, config):
         super(NpsApi, self).__init__(config, object_type='nps')
-    
+
     def recipients_incremental(self, start_time):
         """
         Retrieve NPS Recipients incremental

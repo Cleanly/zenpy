@@ -14,15 +14,15 @@ log = logging.getLogger(__name__)
 class BaseResultGenerator(collections.Iterable):
     """
     Base class for result generators. Subclasses should implement process_page()
-    and return a list of results. 
+    and return a list of results.
     """
 
-    def __init__(self, response_handler, response_json):
+    def __init__(self, response_handler, response_json, **kwargs):
         self.response_handler = response_handler
         self._response_json = response_json
         self.values = None
         self.position = 0
-        self.update_attrs()
+        self.update_attrs(**kwargs)
 
     @abstractmethod
     def process_page(self):
@@ -31,6 +31,8 @@ class BaseResultGenerator(collections.Iterable):
     def next(self):
         if self.values is None:
             self.values = self.process_page()
+        if hasattr(self, 'per_page') and self.per_page == self.position:
+            raise StopIteration()
         if self.position >= len(self.values):
             self.handle_pagination()
         if len(self.values) < 1:
@@ -46,11 +48,16 @@ class BaseResultGenerator(collections.Iterable):
         self.position = 0
         self.values = self.process_page()
 
-    def update_attrs(self):
+    def update_attrs(self, **kwargs):
         """ Add attributes such as count/end_time that can be present """
         for key, value in self._response_json.items():
             if key != 'results' and type(value) not in (list, dict):
                 setattr(self, key, value)
+
+        if kwargs:
+            for key, value in kwargs.items():
+                if key != 'results' and type(value) not in (list, dict):
+                    setattr(self, key, value)
 
     def get_next_page(self):
         """ Retrieve the next page of results. """
@@ -113,7 +120,7 @@ class SearchResultGenerator(BaseResultGenerator):
 
 class ChatResultGenerator(BaseResultGenerator):
     """
-    Generator for ChatApi objects 
+    Generator for ChatApi objects
     """
 
     def process_page(self):
