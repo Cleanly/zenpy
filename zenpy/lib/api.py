@@ -183,7 +183,7 @@ class BaseApi(object):
                 if handler.__name__ == 'ViewResponseHandler':
                     return handler(self).build(response, **kwargs)
 
-                return handler(self).build(response)
+                return handler(self).build(response, **kwargs)
 
         raise ZenpyException("Could not handle response: {}".format(pretty_response))
 
@@ -225,7 +225,7 @@ class BaseApi(object):
                     return self._get(self._build_url(endpoint=endpoint(*endpoint_args, **endpoint_kwargs)))
             return cached_objects
         else:
-            return self._get(self._build_url(endpoint=endpoint(*endpoint_args, **endpoint_kwargs)))
+            return self._get(self._build_url(endpoint=endpoint(*endpoint_args, **endpoint_kwargs)), **endpoint_kwargs)
 
     def _check_response(self, response):
         """

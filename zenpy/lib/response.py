@@ -199,8 +199,8 @@ class SearchResponseHandler(GenericZendeskResponseHandler):
         except ValueError:
             return False
 
-    def build(self, response):
-        return SearchResultGenerator(self, response.json())
+    def build(self, response, **kwargs):
+        return SearchResultGenerator(self, response.json(), **kwargs)
 
 
 class CombinationResponseHandler(GenericZendeskResponseHandler):

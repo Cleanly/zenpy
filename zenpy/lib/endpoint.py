@@ -226,7 +226,7 @@ class SearchEndpoint(BaseEndpoint):
 
             if key.endswith('_between'):
                 modifiers.append(self.format_between(key, value))
-            elif key in ('sort_by', 'sort_order'):
+            elif key in ('sort_by', 'sort_order', 'page', 'per_page'):
                 sort_order.append("%s=%s" % (key, value))
             elif key.endswith('_after'):
                 renamed_kwargs[key.replace('_after', '>')] = kwargs[key]
