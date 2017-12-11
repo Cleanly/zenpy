@@ -243,7 +243,7 @@ class SearchEndpoint(BaseEndpoint):
                     modifiers.append("-%s" % value)
             elif is_iterable_but_not_string(value):
                 modifiers.append(self.format_or(key, value))
-            else:
+            elif value:
                 renamed_kwargs.update({key + ':': '"%s"' % value})
 
         query = self.endpoint + 'query='
