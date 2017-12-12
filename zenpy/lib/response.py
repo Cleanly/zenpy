@@ -90,7 +90,7 @@ class GenericZendeskResponseHandler(ResponseHandler):
                         response_objects[key].append(zenpy_object)
         return response_objects
 
-    def build(self, response):
+    def build(self, response, **kwargs):
         """
         Deserialize the returned objects and return either a single Zenpy object, or a ResultGenerator in
         the case of multiple results.
