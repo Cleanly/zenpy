@@ -92,7 +92,12 @@ class CRUDRequest(BaseZendeskRequest):
         else:
             kwargs['id'] = api_objects.id
 
+        # Workaround
+        # When the payload includes via for some reason the signature won't be
+        # added to the comment
         payload = self.build_payload(api_objects)
+        if 'ticket' in payload and 'via' in payload['ticket']:
+            del payload['ticket']['via']
         url = self.api._build_url(self.api.endpoint(*args, **kwargs))
         return self.api._put(url, payload=payload)
 
