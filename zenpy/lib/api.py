@@ -79,7 +79,7 @@ class BaseApi(object):
         return self._process_response(response)
 
     def _get(self, url, raw_response=False, **kwargs):
-        if kwargs:
+        if kwargs and '?' not in url:
             params = '&'.join("%s=%s" % (key, val) for key, val in kwargs.iteritems() if val)
             url = '?'.join([url, params])
             response = self._call_api(self.session.get, url, timeout=self.timeout)
