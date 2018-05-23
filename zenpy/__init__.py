@@ -22,8 +22,16 @@ from zenpy.lib.api import (
     SlaPolicyApi,
     ChatApi,
     GroupMembershipApi,
+    HelpCentreApi,
     RecipientAddressApi,
-    NpsApi)
+    NpsApi, TicketFieldApi,
+    TriggerApi,
+    AutomationApi,
+    DynamicContentApi,
+    TargetApi,
+    BrandApi,
+    TicketFormApi)
+
 from zenpy.lib.cache import ZenpyCache, cache_mapping, purge_cache
 from zenpy.lib.endpoint import EndpointFactory
 from zenpy.lib.exception import ZenpyException
@@ -88,67 +96,44 @@ class Zenpy(object):
             subdomain=subdomain,
             session=session,
             timeout=timeout,
-            ratelimit=ratelimit,
-            ratelimit_budget=ratelimit_budget
+            ratelimit=int(ratelimit) if ratelimit is not None else None,
+            ratelimit_budget=int(ratelimit_budget) if ratelimit_budget is not None else None
         )
 
         self.users = UserApi(config)
-
         self.user_fields = Api(config, object_type='user_field')
-
         self.groups = GroupApi(config)
-
         self.macros = MacroApi(config)
-
         self.organizations = OrganizationApi(config)
-
         self.organization_memberships = OrganizationMembershipApi(config)
-
         self.tickets = TicketApi(config)
-
         self.suspended_tickets = SuspendedTicketApi(config, object_type='suspended_ticket')
-
         self.search = Api(config, object_type='results', endpoint=EndpointFactory('search'))
-
         self.topics = Api(config, object_type='topic')
-
         self.attachments = AttachmentApi(config)
-
-        self.brands = Api(config, object_type='brand')
-
+        self.brands = BrandApi(config, object_type='brand')
         self.job_status = Api(config, object_type='job_status', endpoint=EndpointFactory('job_statuses'))
-
         self.tags = Api(config, object_type='tag')
-
         self.satisfaction_ratings = SatisfactionRatingApi(config)
-
         self.sharing_agreements = SharingAgreementAPI(config)
-
         self.activities = Api(config, object_type='activity')
-
         self.group_memberships = GroupMembershipApi(config)
-
         self.end_user = EndUserApi(config)
-
         self.ticket_metrics = Api(config, object_type='ticket_metric')
-
-        self.ticket_fields = Api(config, object_type='ticket_field')
-
-        self.ticket_forms = Api(config, object_type='ticket_form')
-
+        self.ticket_fields = TicketFieldApi(config, object_type='ticket_field')
+        self.ticket_forms = TicketFormApi(config, object_type='ticket_form')
         self.ticket_import = TicketImportAPI(config)
-
         self.requests = RequestAPI(config)
-
         self.chats = ChatApi(config, endpoint=EndpointFactory('chats'))
-
         self.views = ViewApi(config)
-
         self.sla_policies = SlaPolicyApi(config)
-
+        self.help_center = HelpCentreApi(config)
         self.recipient_addresses = RecipientAddressApi(config)
-
         self.nps = NpsApi(config)
+        self.triggers = TriggerApi(config, object_type='trigger')
+        self.automations = AutomationApi(config, object_type='automation')
+        self.dynamic_content = DynamicContentApi(config, object_type='dynamic_content_item')
+        self.targets = TargetApi(config, object_type='target')
 
     def _init_session(self, email, token, oath_token, password, session):
         if not session:
@@ -172,8 +157,7 @@ class Zenpy(object):
             else:
                 raise ZenpyException("Invalid arguments to _init_session()!")
 
-        headers = {'Content-type': 'application/json',
-                   'User-Agent': 'Zenpy/1.2'}
+        headers = {'User-Agent': 'Zenpy/1.2'}
         session.headers.update(headers)
         return session
 

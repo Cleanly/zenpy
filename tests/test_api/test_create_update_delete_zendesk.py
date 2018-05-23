@@ -1,6 +1,6 @@
 from test_api.fixtures.__init__ import SingleCreateApiTestCase, CRUDApiTestCase, \
     SingleUpdateApiTestCase, SingleDeleteApiTestCase
-from zenpy.lib.api_objects import Ticket, TicketAudit, Group, User, Organization, Macro, RecipientAddress
+from zenpy.lib.api_objects import Ticket, TicketAudit, Group, User, Organization, Macro, RecipientAddress, TicketField
 
 
 class TestTicketCreateUpdateDelete(CRUDApiTestCase):
@@ -20,32 +20,41 @@ class TestGroupCreateUpdateDelete(SingleCreateApiTestCase,
     api_name = 'groups'
 
 
-class TestUserCreateUpdateDelete(SingleCreateApiTestCase,
-                                 SingleUpdateApiTestCase,
-                                 SingleDeleteApiTestCase):
+class TestUserCreateUpdateDelete(CRUDApiTestCase):
     __test__ = True
     ZenpyType = User
     object_kwargs = dict(name='testUser')
     api_name = 'users'
 
 
-class TestOrganizationCreateUpdateDelete(SingleCreateApiTestCase, SingleUpdateApiTestCase):
+class TestOrganizationCreateUpdateDelete(CRUDApiTestCase):
     __test__ = True
     ZenpyType = Organization
-    object_kwargs = dict(name='testOrganization')
+    object_kwargs = dict(name='testOrganization{}')
     api_name = 'organizations'
 
 
-class TestMacrosCreateUpdateDelete(SingleUpdateApiTestCase, SingleCreateApiTestCase):
+class TestMacrosCreateUpdateDelete(SingleUpdateApiTestCase,
+                                   SingleCreateApiTestCase):
     __test__ = True
     ZenpyType = Macro
     object_kwargs = dict(title='TestMacro', actions=[{"field": "status", "value": "solved"}])
     api_name = 'macros'
 
 
-class TestRecipientAddressCreateUpdateDelete(SingleUpdateApiTestCase, SingleCreateApiTestCase):
+class TestRecipientAddressCreateUpdateDelete(SingleUpdateApiTestCase,
+                                             SingleCreateApiTestCase):
     __test__ = True
     ZenpyType = RecipientAddress
     object_kwargs = dict(name='Sales', email='help@omniwearshop.com')
     ignore_update_kwargs = ['email']  # Email value cannot be changed after creation
     api_name = 'recipient_addresses'
+
+
+class TestTicketFieldCreateUpdateDelete(SingleCreateApiTestCase,
+                                        SingleUpdateApiTestCase,
+                                        SingleDeleteApiTestCase):
+    __test__ = True
+    ZenpyType = TicketField
+    object_kwargs = dict(type='text', title='I AM A TEST')
+    api_name = 'ticket_fields'

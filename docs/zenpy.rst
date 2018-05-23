@@ -12,8 +12,6 @@ The wrapper supports both reading and writing from the API.
 
 :class:`Zenpy` supports both Python2 and Python3.
 
-:class:`Zenpy` is still in beta, so please report any bugs!
-
 -  `Installation <#installation>`__
 -  `Usage <#usage>`__
 -  `Searching the API <#searching-the-api>`__
@@ -154,14 +152,14 @@ print all the comments on a ticket:
 
 .. code:: python
 
-    for comment in zenpy_client.tickets.comments(ticket_id=86):
+    for comment in zenpy_client.tickets.comments(ticket=86):
         print comment.body
 
 Or organizations attached to a user:
 
 .. code:: python
 
-    for organization in zenpy_client.users.organizations(user_id=1276936927):
+    for organization in zenpy_client.users.organizations(user=1276936927):
         print organization.name
 
 You could do so with these second level endpoints.
@@ -276,6 +274,58 @@ The last ``end_time`` value can be retrieved from the generator:
 Passing this value to a new call as the ``start_time`` will return items
 created or modified since that point in time.
 
+
+Pagination
+----------
+
+Pagination in Zenpy is supported via Python slices. The current implementation has a few limitations:
+
+* Does not support negative values (no fancy slicing)
+* Always pulls the first 100 objects (sometimes one extra API call than necessary)
+* Does not support multiple accesses of the same slice
+
+Example Usage:
+
+.. code:: python
+
+    ticket_generator = zenpy_client.tickets()
+
+    # Arguments to slice are [start:stop:page_size], they are all optional
+    tickets = ticket_generator[3950:4000:50]
+    print(tickets)
+
+    # The following examples do what you would expect
+    tickets = ticket_generator[240:]
+    tickets = ticket_generator[:207]
+    tickets = ticket_generator[::]
+
+
+Cursor Based Generators
+-----------------------
+
+Zendesk uses cursor based pagination for the TicketAudit endpoint. The use of a cursor allows you to change
+the direction in which you consume objects. This is supported in Zenpy via the reversed() Python method:
+
+.. code:: python
+
+    audit_generator = zenpy_client.tickets.audits()
+    # You can retrieve the cursor values from the generator.
+    print(audit_generator.after_cursor, audit_generator.before_cursor)
+
+    # Iterate over the last 1000 audits.
+    for audit in audit_generator:
+        print(audit)
+
+    # You can pass an explicit cursor value to consume audits create after that point.
+    for audit in zenpy_client.tickets.audits(cursor='fDE1MTc2MjkwNTQuMHx8'):
+        print(audit)
+
+    # Reversing the generator reverses the direction in which you consume objects. The
+    # following grabs objects from just before the cursor value until the beginning of time.
+    for audit in reversed(zenpy_client.tickets.audits(cursor='fDE1MTc2MjkwNTQuMHx8')):
+        print(audit)
+
+
 Rate Limiting
 -------------
 
@@ -297,6 +347,17 @@ Zendesk imposes rate limiting (https://developer.zendesk.com/rest_api/docs/core/
 
         zenpy_client = Zenpy(ratelimit_budget=60, **creds)
 
+Side-Loading
+------------
+Zendesk supports "side-loading" objects to reduce the number of API calls necessary to retrieve what you are after - https://developer.zendesk.com/rest_api/docs/core/side_loading. Zenpy currently only minimally supports this feature, however I plan to add proper support for it soon. If this is something you really want raise an issue and I will get to it sooner. To take advantage of this feature for those endpoints that support it, simple pass an "include" kwarg with the objects you would like to load, eg:
+
+.. code:: python
+
+    for ticket in zenpy_client.tickets(include=['users']):
+        print(ticket.submitter)
+
+The code above will not need to generate an additional API call to retrieve the submitter as it was returned and cached along with the ticket.
+
 Caching
 ~~~~~~~
 
@@ -306,30 +367,20 @@ If we turn logging on, we can see Zenpy's caching in action. The code:
 
 .. code:: python
 
-    print zenpy_client.users(id=1159307768).name
-    print zenpy_client.users(id=1159307768).name
+    me = zenpy_client.users.me()
+    user = zenpy_client.users(id=me.id)
+    user = zenpy_client.users(id=me.id)
 
 Outputs:
 
 ::
 
-    DEBUG - Cache MISS: [User 1159307768]
-    DEBUG - GET: https://testing23.zendesk.com/api/v2/users/1159307768.json/?include=organizations,abilities,roles,identities,groups
-    DEBUG - Caching 1 Groups
-    DEBUG - Caching: [User 1159307768]
-    DEBUG - Caching 1 Organizations
-    Face Toe
-    DEBUG - Cache HIT: [User 1159307768]
-    Face Toe
+    DEBUG - GET: https://d3v-zenpydev.zendesk.com/api/v2/users/me.json - {'timeout': 60.0}
+    DEBUG - Caching: [User(id=116514121092)]
+    DEBUG - Cache HIT: [User 116514121092]
+    DEBUG - Cache HIT: [User 116514121092]
 
-There a few things to note here. We can see when the user was first
-requested it was not in the cache, which led to an API call. The GET
-request which was generated requests the user, but it also adds an
-``include`` directive to pull related objects which led to a Group and
-Organization object being cached as well. This is called Sideloading by
-Zendesk, and :class:`Zenpy` takes advantage of it wherever it can. We can see
-that the next time the user was requested it was found in the cache and
-no API call was generated.
+Here we see that only one API call is generated, as the user already existed in the cache after the first call.
 
 Controlling Caching
 -------------------

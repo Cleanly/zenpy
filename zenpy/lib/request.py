@@ -1,14 +1,13 @@
 import collections
-from abc import abstractmethod
-
 import os
+from abc import abstractmethod
 
 from zenpy.lib.api_objects import BaseObject, Ticket
 from zenpy.lib.api_objects.chat_objects import Shortcut, Trigger
 from zenpy.lib.cache import delete_from_cache
 from zenpy.lib.endpoint import EndpointFactory
 from zenpy.lib.exception import ZenpyException
-from zenpy.lib.util import get_object_type, as_plural
+from zenpy.lib.util import get_object_type, as_plural, is_iterable_but_not_string
 
 
 class RequestHandler(object):
@@ -67,6 +66,7 @@ class CRUDRequest(BaseZendeskRequest):
         self.check_type(api_objects)
 
         create_or_update = kwargs.pop('create_or_update', False)
+        create = kwargs.pop('create', False)
         if isinstance(api_objects, collections.Iterable) and create_or_update:
             kwargs['create_or_update_many'] = True
             endpoint = self.api.endpoint.create_or_update_many
@@ -75,6 +75,8 @@ class CRUDRequest(BaseZendeskRequest):
             endpoint = self.api.endpoint
         elif create_or_update:
             endpoint = self.api.endpoint.create_or_update
+        elif create:
+            endpoint = self.api.endpoint.create
         else:
             endpoint = self.api.endpoint
 
@@ -117,6 +119,15 @@ class CRUDRequest(BaseZendeskRequest):
         response = self.api._delete(url, payload=payload)
         delete_from_cache(api_objects)
         return response
+
+
+class DynamicContentRequest(CRUDRequest):
+    def build_payload(self, api_objects):
+        if isinstance(api_objects, collections.Iterable):
+            payload_key = 'items'
+        else:
+            payload_key = 'item'
+        return {payload_key: self.api._serialize(api_objects)}
 
 
 class SuspendedTicketRequest(BaseZendeskRequest):
@@ -199,7 +210,7 @@ class UserIdentityRequest(BaseZendeskRequest):
 
     def put(self, endpoint, user, identity):
         payload = self.build_payload(identity)
-        url = self.api._build_url(endpoint(user, identity.id))
+        url = self.api._build_url(endpoint(user, identity))
         return self.api._put(url, payload=payload)
 
     def delete(self, user, identity):
@@ -248,12 +259,6 @@ class UserMergeRequest(BaseZendeskRequest):
     """ Handles merging two users. """
 
     def put(self, source, destination):
-        self.check_type(destination)
-        if issubclass(type(source), BaseObject):
-            source = source.id
-        if issubclass(type(destination), BaseObject):
-            destination = destination.id
-
         url = self.api._build_url(self.api.endpoint.merge(id=source))
         payload = {self.api.object_type: dict(id=destination)}
         return self.api._put(url, payload=payload)
@@ -269,15 +274,10 @@ class TicketMergeRequest(RequestHandler):
     """ Handles merging one or more tickets.  """
 
     def post(self, target, source, target_comment=None, source_comment=None):
-        if isinstance(target, Ticket):
-            target = target.id
-        if isinstance(source, Ticket):
-            source_ids = [source.id]
-        else:
-            source_ids = [t.id if isinstance(t, Ticket) else t for t in source]
-
+        if not is_iterable_but_not_string(source):
+            source = [source]
         payload = dict(
-            ids=source_ids,
+            ids=source,
             target_comment=target_comment,
             source_comment=source_comment
         )
@@ -389,3 +389,104 @@ class AgentRequest(PersonRequest):
 
 class VisitorRequest(PersonRequest):
     pass
+
+
+class HelpdeskCommentRequest(BaseZendeskRequest):
+    def put(self, endpoint, article, comment):
+        url = self.api._build_url(endpoint(article, comment.id))
+        payload = self.build_payload(comment)
+        return self.api._put(url, payload)
+
+    def post(self, endpoint, article, comment):
+        url = self.api._build_url(endpoint(id=article))
+        payload = self.build_payload(comment)
+        return self.api._post(url, payload)
+
+    def delete(self, endpoint, article, comment):
+        url = self.api._build_url(endpoint(article, comment))
+        return self.api._delete(url)
+
+
+class HelpCentreRequest(BaseZendeskRequest):
+    def put(self, endpoint, article, api_object):
+        url = self.api._build_url(endpoint(article, api_object))
+        payload = self.build_payload(api_object)
+        return self.api._put(url, payload)
+
+    def post(self, endpoint, article, api_object):
+        url = self.api._build_url(endpoint(id=article))
+        payload = self.build_payload(api_object)
+        return self.api._post(url, payload)
+
+    def delete(self, endpoint, article, api_object):
+        url = self.api._build_url(endpoint(article, api_object))
+        return self.api._delete(url)
+
+
+class PostCommentRequest(HelpCentreRequest):
+    def build_payload(self, translation):
+        return {get_object_type(translation): self.api._serialize(translation)}
+
+    def put(self, endpoint, post, comment):
+        url = self.api._build_url(endpoint(post, comment.id))
+        payload = self.build_payload(comment)
+        return self.api._put(url, payload)
+
+
+class SubscriptionRequest(HelpCentreRequest):
+    def build_payload(self, translation):
+        return {get_object_type(translation): self.api._serialize(translation)}
+
+
+class AccessPolicyRequest(BaseZendeskRequest):
+    def put(self, endpoint, help_centre_object, access_policy):
+        payload = self.build_payload(access_policy)
+        url = self.api._build_url(endpoint(id=help_centre_object))
+        return self.api._put(url, payload=payload)
+
+    def delete(self, api_objects, *args, **kwargs):
+        raise NotImplementedError("Cannot delete access policies!")
+
+    def post(self, api_objects, *args, **kwargs):
+        raise NotImplementedError("POST not supported for access policies!")
+
+    def build_payload(self, help_centre_object):
+        return {get_object_type(help_centre_object): self.api._serialize(help_centre_object)}
+
+
+class TranslationRequest(HelpCentreRequest):
+    def build_payload(self, translation):
+        return {get_object_type(translation): self.api._serialize(translation)}
+
+    def put(self, endpoint, help_centre_object_id, translation):
+        if translation.locale is None:
+            raise ZenpyException("Locale can not be None when updating translation!")
+        url = self.api._build_url(endpoint(help_centre_object_id, translation.locale))
+        payload = self.build_payload(translation)
+        return self.api._put(url, payload=payload)
+
+    def delete(self, endpoint, translation):
+        url = self.api._build_url(endpoint(id=translation))
+        return self.api._delete(url)
+
+
+class HelpdeskAttachmentRequest(BaseZendeskRequest):
+    def delete(self, endpoint, article_attachment):
+        url = self.api._build_url(endpoint(id=article_attachment))
+        return self.api._delete(url)
+
+    def put(self, api_objects, *args, **kwargs):
+        raise NotImplementedError("You cannot update HelpCentre attachments!")
+
+    def post(self, endpoint, attachment, article=None, inline=False):
+        if article:
+            url = self.api._build_url(endpoint(id=article))
+        else:
+            url = self.api._build_url(endpoint())
+
+        if hasattr(attachment, 'read'):
+            return self.api._post(url, payload={}, files=dict(file=attachment))
+        elif os.path.isfile(attachment):
+            with open(attachment, 'rb') as fp:
+                return self.api._post(url, payload={}, files=dict(file=fp))
+        raise ValueError("Attachment is not a file-like object or valid path!")

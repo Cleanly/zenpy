@@ -4,41 +4,82 @@
 ######################################################################
 
 import dateutil.parser
+from zenpy.lib.proxy import ProxyDict, ProxyList
 
 
 class BaseObject(object):
-    def to_dict(self):
+    """
+    Base for all Zenpy objects. Keeps track of which attributes have been modified.
+    """
+
+    def __new__(cls, *args, **kwargs):
+        instance = super(BaseObject, cls).__new__(cls)
+        instance.__dict__['_dirty_attributes'] = set()
+        instance.__dict__['_dirty_callback'] = None
+        instance.__dict__['_always_dirty'] = set()
+        return instance
+
+    def __setattr__(self, key, value):
+        if key not in ('_dirty', '_dirty_callback', '_always_dirty'):
+            self.__dict__['_dirty_attributes'].add(key)
+            if self._dirty_callback is not None:
+                self._dirty_callback()
+        object.__setattr__(self, key, value)
+
+    def _clean_dirty(self):
+        self.__dict__['_dirty_attributes'].clear()
+        self._dirty = False
+        for key, val in vars(self).items():
+            func = getattr(val, '_clean_dirty', None)
+            if callable(func):
+                func()
+
+    def to_dict(self, serialize=False):
+        """
+        This method works by copying self.__dict__, and removing everything that should not be serialized.
+        """
         copy_dict = self.__dict__.copy()
-        for key in list(copy_dict.keys()):
-            if copy_dict[key] is None or key == 'api':
-                del copy_dict[key]
+        for key, value in vars(self).items():
+            # We want to send all ids to Zendesk always
+            if serialize and key == 'id':
                 continue
 
-            if key.startswith('_'):
+            # This object has a flag indicating it has been dirtied, so we want to send it off.
+            elif serialize and getattr(value, '_dirty', False):
+                continue
+
+            # Here we have an attribute that should always be sent to Zendesk.
+            elif serialize and key in self._always_dirty:
+                continue
+
+            # These are for internal tracking, so just delete.
+            elif key in ('api', '_dirty_attributes', '_always_dirty', '_dirty_callback'):
+                del copy_dict[key]
+
+            # If the attribute has not been modified, do not send it.
+            elif serialize and key not in self._dirty_attributes:
+                del copy_dict[key]
+
+            # Some reserved words are prefixed with an underscore, remove it here.
+            elif key.startswith('_'):
                 copy_dict[key[1:]] = copy_dict[key]
                 del copy_dict[key]
         return copy_dict
 
     def __repr__(self):
+        class_name = type(self).__name__
+        if class_name in ('UserField',):
+            return "{}()".format(class_name)
+
         def formatted(item):
-            return item if isinstance(item, int) else "'{}'".format(item)
+            return item if (isinstance(item, int) or item is None) else "'{}'".format(item)
 
         for identifier in ('id', 'token', 'key', 'name', 'account_key'):
             if hasattr(self, identifier):
-                return "{}({}={})".format(self.__class__.__name__, identifier, formatted(getattr(self, identifier)))
-        return "{}()".format(self.__class__.__name__)
+                return "{}({}={})".format(class_name, identifier, formatted(getattr(self, identifier)))
+        return "{}()".format(class_name)
 
 
-
-class Action(BaseObject):
-    def __init__(self, api=None, field=None, value=None, **kwargs):
-
-        self.api = api
-        self.field = field
-        self.value = value
-
-        for key, value in kwargs.items():
-            setattr(self, key, value)
 
 
 class Activity(BaseObject):
@@ -66,6 +107,13 @@ class Activity(BaseObject):
 
         for key, value in kwargs.items():
             setattr(self, key, value)
+
+        for key in self.to_dict():
+            if getattr(self, key) is None:
+                try:
+                    self._dirty_attributes.remove(key)
+                except KeyError:
+                    continue
 
     @property
     def created(self):
@@ -109,6 +157,13 @@ class AgentMacroReference(BaseObject):
 
         for key, value in kwargs.items():
             setattr(self, key, value)
+
+        for key in self.to_dict():
+            if getattr(self, key) is None:
+                try:
+                    self._dirty_attributes.remove(key)
+                except KeyError:
+                    continue
 
     @property
     def macro(self):
@@ -169,6 +224,13 @@ class Attachment(BaseObject):
         for key, value in kwargs.items():
             setattr(self, key, value)
 
+        for key in self.to_dict():
+            if getattr(self, key) is None:
+                try:
+                    self._dirty_attributes.remove(key)
+                except KeyError:
+                    continue
+
 
 class Audit(BaseObject):
     def __init__(self,
@@ -193,6 +255,13 @@ class Audit(BaseObject):
 
         for key, value in kwargs.items():
             setattr(self, key, value)
+
+        for key in self.to_dict():
+            if getattr(self, key) is None:
+                try:
+                    self._dirty_attributes.remove(key)
+                except KeyError:
+                    continue
 
     @property
     def author(self):
@@ -228,6 +297,94 @@ class Audit(BaseObject):
         if ticket:
             self.ticket_id = ticket.id
             self._ticket = ticket
+
+
+class Automation(BaseObject):
+    def __init__(self,
+                 api=None,
+                 actions=None,
+                 active=None,
+                 conditions=None,
+                 created_at=None,
+                 id=None,
+                 position=None,
+                 raw_title=None,
+                 title=None,
+                 updated_at=None,
+                 url=None,
+                 **kwargs):
+
+        self.api = api
+
+        # Comment: An object describing what the automation will do
+        # Type: :class:`Actions`
+        self.actions = actions
+
+        # Comment: Whether the automation is active
+        # Type: boolean
+        self.active = active
+
+        # Comment: An object that describes the conditions under which the automation will execute
+        # Type: :class:`Conditions`
+        self.conditions = conditions
+
+        # Comment: The time the automation was created
+        # Type: date
+        self.created_at = created_at
+
+        # Comment: Automatically assigned when created
+        # Type: integer
+        self.id = id
+
+        # Comment: Position of the automation, determines the order they will execute in
+        # Type: integer
+        self.position = position
+        self.raw_title = raw_title
+
+        # Comment: The title of the automation
+        # Type: string
+        self.title = title
+
+        # Comment: The time of the last update of the automation
+        # Type: date
+        self.updated_at = updated_at
+        self.url = url
+
+        for key, value in kwargs.items():
+            setattr(self, key, value)
+
+        for key in self.to_dict():
+            if getattr(self, key) is None:
+                try:
+                    self._dirty_attributes.remove(key)
+                except KeyError:
+                    continue
+
+    @property
+    def created(self):
+        """
+        |  Comment: The time the automation was created
+        """
+        if self.created_at:
+            return dateutil.parser.parse(self.created_at)
+
+    @created.setter
+    def created(self, created):
+        if created:
+            self.created_at = created
+
+    @property
+    def updated(self):
+        """
+        |  Comment: The time of the last update of the automation
+        """
+        if self.updated_at:
+            return dateutil.parser.parse(self.updated_at)
+
+    @updated.setter
+    def updated(self, updated):
+        if updated:
+            self.updated_at = updated
 
 
 class Brand(BaseObject):
@@ -331,6 +488,13 @@ class Brand(BaseObject):
         for key, value in kwargs.items():
             setattr(self, key, value)
 
+        for key in self.to_dict():
+            if getattr(self, key) is None:
+                try:
+                    self._dirty_attributes.remove(key)
+                except KeyError:
+                    continue
+
     @property
     def created(self):
         """
@@ -376,6 +540,13 @@ class CcEvent(BaseObject):
         for key, value in kwargs.items():
             setattr(self, key, value)
 
+        for key in self.to_dict():
+            if getattr(self, key) is None:
+                try:
+                    self._dirty_attributes.remove(key)
+                except KeyError:
+                    continue
+
 
 class ChangeEvent(BaseObject):
     def __init__(self,
@@ -396,6 +567,13 @@ class ChangeEvent(BaseObject):
 
         for key, value in kwargs.items():
             setattr(self, key, value)
+
+        for key in self.to_dict():
+            if getattr(self, key) is None:
+                try:
+                    self._dirty_attributes.remove(key)
+                except KeyError:
+                    continue
 
 
 class Comment(BaseObject):
@@ -425,6 +603,13 @@ class Comment(BaseObject):
 
         for key, value in kwargs.items():
             setattr(self, key, value)
+
+        for key in self.to_dict():
+            if getattr(self, key) is None:
+                try:
+                    self._dirty_attributes.remove(key)
+                except KeyError:
+                    continue
 
     @property
     def author(self):
@@ -468,6 +653,13 @@ class CommentPrivacyChangeEvent(BaseObject):
         for key, value in kwargs.items():
             setattr(self, key, value)
 
+        for key in self.to_dict():
+            if getattr(self, key) is None:
+                try:
+                    self._dirty_attributes.remove(key)
+                except KeyError:
+                    continue
+
     @property
     def comment(self):
 
@@ -491,6 +683,13 @@ class Conditions(BaseObject):
         for key, value in kwargs.items():
             setattr(self, key, value)
 
+        for key in self.to_dict():
+            if getattr(self, key) is None:
+                try:
+                    self._dirty_attributes.remove(key)
+                except KeyError:
+                    continue
+
 
 class CreateEvent(BaseObject):
     def __init__(self,
@@ -510,6 +709,13 @@ class CreateEvent(BaseObject):
         for key, value in kwargs.items():
             setattr(self, key, value)
 
+        for key in self.to_dict():
+            if getattr(self, key) is None:
+                try:
+                    self._dirty_attributes.remove(key)
+                except KeyError:
+                    continue
+
 
 class CustomField(BaseObject):
     def __init__(self, api=None, id=None, value=None, **kwargs):
@@ -521,6 +727,13 @@ class CustomField(BaseObject):
         for key, value in kwargs.items():
             setattr(self, key, value)
 
+        for key in self.to_dict():
+            if getattr(self, key) is None:
+                try:
+                    self._dirty_attributes.remove(key)
+                except KeyError:
+                    continue
+
 
 class Definitions(BaseObject):
     def __init__(self, api=None, all=None, any=None, **kwargs):
@@ -531,6 +744,83 @@ class Definitions(BaseObject):
 
         for key, value in kwargs.items():
             setattr(self, key, value)
+
+        for key in self.to_dict():
+            if getattr(self, key) is None:
+                try:
+                    self._dirty_attributes.remove(key)
+                except KeyError:
+                    continue
+
+
+class DynamicContent(BaseObject):
+    def __init__(self,
+                 api=None,
+                 created_at=None,
+                 default_locale_id=None,
+                 id=None,
+                 name=None,
+                 outdated=None,
+                 placeholder=None,
+                 updated_at=None,
+                 url=None,
+                 variants=None,
+                 **kwargs):
+
+        self.api = api
+        self.created_at = created_at
+        self.default_locale_id = default_locale_id
+        self.id = id
+        self.name = name
+        self.outdated = outdated
+        self.placeholder = placeholder
+        self.updated_at = updated_at
+        self.url = url
+        self.variants = variants
+
+        for key, value in kwargs.items():
+            setattr(self, key, value)
+
+        for key in self.to_dict():
+            if getattr(self, key) is None:
+                try:
+                    self._dirty_attributes.remove(key)
+                except KeyError:
+                    continue
+
+    @property
+    def created(self):
+
+        if self.created_at:
+            return dateutil.parser.parse(self.created_at)
+
+    @created.setter
+    def created(self, created):
+        if created:
+            self.created_at = created
+
+    @property
+    def default_locale(self):
+
+        if self.api and self.default_locale_id:
+            return self.api._get_default_locale(self.default_locale_id)
+
+    @default_locale.setter
+    def default_locale(self, default_locale):
+        if default_locale:
+            self.default_locale_id = default_locale.id
+            self._default_locale = default_locale
+
+    @property
+    def updated(self):
+
+        if self.updated_at:
+            return dateutil.parser.parse(self.updated_at)
+
+    @updated.setter
+    def updated(self, updated):
+        if updated:
+            self.updated_at = updated
 
 
 class ErrorEvent(BaseObject):
@@ -544,6 +834,13 @@ class ErrorEvent(BaseObject):
         for key, value in kwargs.items():
             setattr(self, key, value)
 
+        for key in self.to_dict():
+            if getattr(self, key) is None:
+                try:
+                    self._dirty_attributes.remove(key)
+                except KeyError:
+                    continue
+
 
 class Export(BaseObject):
     def __init__(self, api=None, status=None, view_id=None, **kwargs):
@@ -554,6 +851,13 @@ class Export(BaseObject):
 
         for key, value in kwargs.items():
             setattr(self, key, value)
+
+        for key in self.to_dict():
+            if getattr(self, key) is None:
+                try:
+                    self._dirty_attributes.remove(key)
+                except KeyError:
+                    continue
 
     @property
     def view(self):
@@ -586,6 +890,13 @@ class ExternalEvent(BaseObject):
         for key, value in kwargs.items():
             setattr(self, key, value)
 
+        for key in self.to_dict():
+            if getattr(self, key) is None:
+                try:
+                    self._dirty_attributes.remove(key)
+                except KeyError:
+                    continue
+
 
 class FacebookCommentEvent(BaseObject):
     def __init__(self,
@@ -617,6 +928,13 @@ class FacebookCommentEvent(BaseObject):
         for key, value in kwargs.items():
             setattr(self, key, value)
 
+        for key in self.to_dict():
+            if getattr(self, key) is None:
+                try:
+                    self._dirty_attributes.remove(key)
+                except KeyError:
+                    continue
+
     @property
     def author(self):
 
@@ -628,18 +946,6 @@ class FacebookCommentEvent(BaseObject):
         if author:
             self.author_id = author.id
             self._author = author
-
-    @property
-    def graph_object(self):
-
-        if self.api and self.graph_object_id:
-            return self.api._get_graph_object(self.graph_object_id)
-
-    @graph_object.setter
-    def graph_object(self, graph_object):
-        if graph_object:
-            self.graph_object_id = graph_object.id
-            self._graph_object = graph_object
 
 
 class FacebookEvent(BaseObject):
@@ -664,90 +970,12 @@ class FacebookEvent(BaseObject):
         for key, value in kwargs.items():
             setattr(self, key, value)
 
-
-class Forum(BaseObject):
-    def __init__(self,
-                 api=None,
-                 access=None,
-                 category_id=None,
-                 created_at=None,
-                 description=None,
-                 forum_type=None,
-                 id=None,
-                 locale_id=None,
-                 locked=None,
-                 name=None,
-                 organization_id=None,
-                 position=None,
-                 tags=None,
-                 updated_at=None,
-                 url=None,
-                 **kwargs):
-
-        self.api = api
-        self.access = access
-        self.category_id = category_id
-        self.created_at = created_at
-        self.description = description
-        self.forum_type = forum_type
-        self.id = id
-        self.locale_id = locale_id
-        self.locked = locked
-        self.name = name
-        self.organization_id = organization_id
-        self.position = position
-        self.tags = tags
-        self.updated_at = updated_at
-        self.url = url
-
-        for key, value in kwargs.items():
-            setattr(self, key, value)
-
-    @property
-    def category(self):
-
-        if self.api and self.category_id:
-            return self.api._get_category(self.category_id)
-
-    @category.setter
-    def category(self, category):
-        if category:
-            self.category_id = category.id
-            self._category = category
-
-    @property
-    def created(self):
-
-        if self.created_at:
-            return dateutil.parser.parse(self.created_at)
-
-    @created.setter
-    def created(self, created):
-        if created:
-            self.created_at = created
-
-    @property
-    def organization(self):
-
-        if self.api and self.organization_id:
-            return self.api._get_organization(self.organization_id)
-
-    @organization.setter
-    def organization(self, organization):
-        if organization:
-            self.organization_id = organization.id
-            self._organization = organization
-
-    @property
-    def updated(self):
-
-        if self.updated_at:
-            return dateutil.parser.parse(self.updated_at)
-
-    @updated.setter
-    def updated(self, updated):
-        if updated:
-            self.updated_at = updated
+        for key in self.to_dict():
+            if getattr(self, key) is None:
+                try:
+                    self._dirty_attributes.remove(key)
+                except KeyError:
+                    continue
 
 
 class Group(BaseObject):
@@ -801,6 +1029,13 @@ class Group(BaseObject):
 
         for key, value in kwargs.items():
             setattr(self, key, value)
+
+        for key in self.to_dict():
+            if getattr(self, key) is None:
+                try:
+                    self._dirty_attributes.remove(key)
+                except KeyError:
+                    continue
 
     @property
     def created(self):
@@ -887,6 +1122,13 @@ class GroupMembership(BaseObject):
 
         for key, value in kwargs.items():
             setattr(self, key, value)
+
+        for key in self.to_dict():
+            if getattr(self, key) is None:
+                try:
+                    self._dirty_attributes.remove(key)
+                except KeyError:
+                    continue
 
     @property
     def created(self):
@@ -975,6 +1217,13 @@ class Identity(BaseObject):
         for key, value in kwargs.items():
             setattr(self, key, value)
 
+        for key in self.to_dict():
+            if getattr(self, key) is None:
+                try:
+                    self._dirty_attributes.remove(key)
+                except KeyError:
+                    continue
+
     @property
     def created(self):
 
@@ -1034,6 +1283,13 @@ class JobStatus(BaseObject):
         for key, value in kwargs.items():
             setattr(self, key, value)
 
+        for key in self.to_dict():
+            if getattr(self, key) is None:
+                try:
+                    self._dirty_attributes.remove(key)
+                except KeyError:
+                    continue
+
 
 class JobStatusResult(BaseObject):
     def __init__(self,
@@ -1057,6 +1313,73 @@ class JobStatusResult(BaseObject):
         for key, value in kwargs.items():
             setattr(self, key, value)
 
+        for key in self.to_dict():
+            if getattr(self, key) is None:
+                try:
+                    self._dirty_attributes.remove(key)
+                except KeyError:
+                    continue
+
+
+class Locale(BaseObject):
+    def __init__(self,
+                 api=None,
+                 created_at=None,
+                 default=None,
+                 id=None,
+                 locale=None,
+                 name=None,
+                 native_name=None,
+                 presentation_name=None,
+                 rtl=None,
+                 updated_at=None,
+                 url=None,
+                 **kwargs):
+
+        self.api = api
+        self.created_at = created_at
+        self.default = default
+        self.id = id
+        self.locale = locale
+        self.name = name
+        self.native_name = native_name
+        self.presentation_name = presentation_name
+        self.rtl = rtl
+        self.updated_at = updated_at
+        self.url = url
+
+        for key, value in kwargs.items():
+            setattr(self, key, value)
+
+        for key in self.to_dict():
+            if getattr(self, key) is None:
+                try:
+                    self._dirty_attributes.remove(key)
+                except KeyError:
+                    continue
+
+    @property
+    def created(self):
+
+        if self.created_at:
+            return dateutil.parser.parse(self.created_at)
+
+    @created.setter
+    def created(self, created):
+        if created:
+            self.created_at = created
+
+    @property
+    def updated(self):
+
+        if self.updated_at:
+            return dateutil.parser.parse(self.updated_at)
+
+    @updated.setter
+    def updated(self, updated):
+        if updated:
+            self.updated_at = updated
+
 
 class LogmeinTranscriptEvent(BaseObject):
     def __init__(self, api=None, body=None, id=None, type=None, **kwargs):
@@ -1068,6 +1391,13 @@ class LogmeinTranscriptEvent(BaseObject):
 
         for key, value in kwargs.items():
             setattr(self, key, value)
+
+        for key in self.to_dict():
+            if getattr(self, key) is None:
+                try:
+                    self._dirty_attributes.remove(key)
+                except KeyError:
+                    continue
 
 
 class Macro(BaseObject):
@@ -1127,6 +1457,13 @@ class Macro(BaseObject):
         for key, value in kwargs.items():
             setattr(self, key, value)
 
+        for key in self.to_dict():
+            if getattr(self, key) is None:
+                try:
+                    self._dirty_attributes.remove(key)
+                except KeyError:
+                    continue
+
     @property
     def created(self):
         """
@@ -1163,6 +1500,13 @@ class MacroResult(BaseObject):
         for key, value in kwargs.items():
             setattr(self, key, value)
 
+        for key in self.to_dict():
+            if getattr(self, key) is None:
+                try:
+                    self._dirty_attributes.remove(key)
+                except KeyError:
+                    continue
+
 
 class Metadata(BaseObject):
     def __init__(self, api=None, custom=None, system=None, **kwargs):
@@ -1173,6 +1517,13 @@ class Metadata(BaseObject):
 
         for key, value in kwargs.items():
             setattr(self, key, value)
+
+        for key in self.to_dict():
+            if getattr(self, key) is None:
+                try:
+                    self._dirty_attributes.remove(key)
+                except KeyError:
+                    continue
 
 
 class NotificationEvent(BaseObject):
@@ -1196,6 +1547,13 @@ class NotificationEvent(BaseObject):
 
         for key, value in kwargs.items():
             setattr(self, key, value)
+
+        for key in self.to_dict():
+            if getattr(self, key) is None:
+                try:
+                    self._dirty_attributes.remove(key)
+                except KeyError:
+                    continue
 
 
 class Organization(BaseObject):
@@ -1306,6 +1664,13 @@ class Organization(BaseObject):
         for key, value in kwargs.items():
             setattr(self, key, value)
 
+        for key in self.to_dict():
+            if getattr(self, key) is None:
+                try:
+                    self._dirty_attributes.remove(key)
+                except KeyError:
+                    continue
+
     @property
     def created(self):
         """
@@ -1318,20 +1683,6 @@ class Organization(BaseObject):
     def created(self, created):
         if created:
             self.created_at = created
-
-    @property
-    def external(self):
-        """
-        |  Comment: A unique external id to associate organizations to an external record
-        """
-        if self.api and self.external_id:
-            return self.api._get_external(self.external_id)
-
-    @external.setter
-    def external(self, external):
-        if external:
-            self.external_id = external.id
-            self._external = external
 
     @property
     def group(self):
@@ -1382,6 +1733,13 @@ class OrganizationActivityEvent(BaseObject):
 
         for key, value in kwargs.items():
             setattr(self, key, value)
+
+        for key in self.to_dict():
+            if getattr(self, key) is None:
+                try:
+                    self._dirty_attributes.remove(key)
+                except KeyError:
+                    continue
 
 
 class OrganizationField(BaseObject):
@@ -1485,6 +1843,13 @@ class OrganizationField(BaseObject):
         for key, value in kwargs.items():
             setattr(self, key, value)
 
+        for key in self.to_dict():
+            if getattr(self, key) is None:
+                try:
+                    self._dirty_attributes.remove(key)
+                except KeyError:
+                    continue
+
     @property
     def created(self):
         """
@@ -1571,6 +1936,13 @@ class OrganizationMembership(BaseObject):
         for key, value in kwargs.items():
             setattr(self, key, value)
 
+        for key in self.to_dict():
+            if getattr(self, key) is None:
+                try:
+                    self._dirty_attributes.remove(key)
+                except KeyError:
+                    continue
+
     @property
     def created(self):
         """
@@ -1644,6 +2016,13 @@ class PolicyMetric(BaseObject):
         for key, value in kwargs.items():
             setattr(self, key, value)
 
+        for key in self.to_dict():
+            if getattr(self, key) is None:
+                try:
+                    self._dirty_attributes.remove(key)
+                except KeyError:
+                    continue
+
 
 class PushEvent(BaseObject):
     def __init__(self,
@@ -1662,6 +2041,13 @@ class PushEvent(BaseObject):
 
         for key, value in kwargs.items():
             setattr(self, key, value)
+
+        for key in self.to_dict():
+            if getattr(self, key) is None:
+                try:
+                    self._dirty_attributes.remove(key)
+                except KeyError:
+                    continue
 
 
 class Recipient(BaseObject):
@@ -1693,6 +2079,13 @@ class Recipient(BaseObject):
 
         for key, value in kwargs.items():
             setattr(self, key, value)
+
+        for key in self.to_dict():
+            if getattr(self, key) is None:
+                try:
+                    self._dirty_attributes.remove(key)
+                except KeyError:
+                    continue
 
     @property
     def created(self):
@@ -1762,6 +2155,76 @@ class Recipient(BaseObject):
         if user:
             self.user_id = user.id
             self._user = user
+
+
+class RecipientAddress(BaseObject):
+    def __init__(self,
+                 api=None,
+                 brand_id=None,
+                 created_at=None,
+                 default=None,
+                 email=None,
+                 forwarding_status=None,
+                 id=None,
+                 name=None,
+                 spf_status=None,
+                 updated_at=None,
+                 **kwargs):
+
+        self.api = api
+        self.brand_id = brand_id
+        self.created_at = created_at
+        self.default = default
+        self.email = email
+        self.forwarding_status = forwarding_status
+        self.id = id
+        self.name = name
+        self.spf_status = spf_status
+        self.updated_at = updated_at
+
+        for key, value in kwargs.items():
+            setattr(self, key, value)
+
+        for key in self.to_dict():
+            if getattr(self, key) is None:
+                try:
+                    self._dirty_attributes.remove(key)
+                except KeyError:
+                    continue
+
+    @property
+    def brand(self):
+
+        if self.api and self.brand_id:
+            return self.api._get_brand(self.brand_id)
+
+    @brand.setter
+    def brand(self, brand):
+        if brand:
+            self.brand_id = brand.id
+            self._brand = brand
+
+    @property
+    def created(self):
+
+        if self.created_at:
+            return dateutil.parser.parse(self.created_at)
+
+    @created.setter
+    def created(self, created):
+        if created:
+            self.created_at = created
+
+    @property
+    def updated(self):
+
+        if self.updated_at:
+            return dateutil.parser.parse(self.updated_at)
+
+    @updated.setter
+    def updated(self, updated):
+        if updated:
+            self.updated_at = updated
 
 
 class Request(BaseObject):
@@ -1895,6 +2358,13 @@ class Request(BaseObject):
         for key, value in kwargs.items():
             setattr(self, key, value)
 
+        for key in self.to_dict():
+            if getattr(self, key) is None:
+                try:
+                    self._dirty_attributes.remove(key)
+                except KeyError:
+                    continue
+
     @property
     def assignee(self):
         """
@@ -2025,6 +2495,13 @@ class Response(BaseObject):
         for key, value in kwargs.items():
             setattr(self, key, value)
 
+        for key in self.to_dict():
+            if getattr(self, key) is None:
+                try:
+                    self._dirty_attributes.remove(key)
+                except KeyError:
+                    continue
+
     @property
     def delivered(self):
 
@@ -2063,7 +2540,7 @@ class Response(BaseObject):
     def recipient(self):
 
         if self.api and self.recipient_id:
-            return self.api._get_recipient(self.recipient_id)
+            return self.api._get_user(self.recipient_id)
 
     @recipient.setter
     def recipient(self, recipient):
@@ -2169,6 +2646,13 @@ class SatisfactionRating(BaseObject):
         for key, value in kwargs.items():
             setattr(self, key, value)
 
+        for key in self.to_dict():
+            if getattr(self, key) is None:
+                try:
+                    self._dirty_attributes.remove(key)
+                except KeyError:
+                    continue
+
     @property
     def assignee(self):
         """
@@ -2272,6 +2756,13 @@ class SatisfactionRatingEvent(BaseObject):
         for key, value in kwargs.items():
             setattr(self, key, value)
 
+        for key in self.to_dict():
+            if getattr(self, key) is None:
+                try:
+                    self._dirty_attributes.remove(key)
+                except KeyError:
+                    continue
+
     @property
     def assignee(self):
 
@@ -2330,6 +2821,13 @@ class SharingAgreement(BaseObject):
         for key, value in kwargs.items():
             setattr(self, key, value)
 
+        for key in self.to_dict():
+            if getattr(self, key) is None:
+                try:
+                    self._dirty_attributes.remove(key)
+                except KeyError:
+                    continue
+
     @property
     def created(self):
         """
@@ -2372,6 +2870,13 @@ class SlaPolicy(BaseObject):
         for key, value in kwargs.items():
             setattr(self, key, value)
 
+        for key in self.to_dict():
+            if getattr(self, key) is None:
+                try:
+                    self._dirty_attributes.remove(key)
+                except KeyError:
+                    continue
+
     @property
     def created(self):
 
@@ -2406,6 +2911,13 @@ class Source(BaseObject):
         for key, value in kwargs.items():
             setattr(self, key, value)
 
+        for key in self.to_dict():
+            if getattr(self, key) is None:
+                try:
+                    self._dirty_attributes.remove(key)
+                except KeyError:
+                    continue
+
 
 class Status(BaseObject):
     def __init__(self,
@@ -2429,68 +2941,12 @@ class Status(BaseObject):
         for key, value in kwargs.items():
             setattr(self, key, value)
 
-
-class RecipientAddress(BaseObject):
-    def __init__(self,
-                 api=None,
-                 brand_id=None,
-                 created_at=None,
-                 default=False,
-                 email=None,
-                 forwarding_status=None,
-                 id=None,
-                 name=None,
-                 spf_status=None,
-                 updated_at=None,
-                 **kwargs):
-
-        self.api = api
-        self.brand_id = brand_id
-        self.created_at = created_at
-        self.default = default
-        self.email = email
-        self.forwarding_status = forwarding_status
-        self.id = id
-        self.name = name
-        self.spf_status = spf_status
-        self.updated_at = updated_at
-
-        for key, value in kwargs.items():
-            setattr(self, key, value)
-
-    @property
-    def brand(self):
-
-        if self.api and self.brand_id:
-            return self.api._get_brand(self.brand_id)
-
-    @brand.setter
-    def brand(self, brand):
-        if brand:
-            self.brand_id = brand.id
-            self._brand = brand
-
-    @property
-    def created(self):
-
-        if self.created_at:
-            return dateutil.parser.parse(self.created_at)
-
-    @created.setter
-    def created(self, created):
-        if created:
-            self.created_at = created
-
-    @property
-    def updated(self):
-
-        if self.updated_at:
-            return dateutil.parser.parse(self.updated_at)
-
-    @updated.setter
-    def updated(self, updated):
-        if updated:
-            self.updated_at = updated
+        for key in self.to_dict():
+            if getattr(self, key) is None:
+                try:
+                    self._dirty_attributes.remove(key)
+                except KeyError:
+                    continue
 
 
 class SuspendedTicket(BaseObject):
@@ -2587,6 +3043,13 @@ class SuspendedTicket(BaseObject):
         for key, value in kwargs.items():
             setattr(self, key, value)
 
+        for key in self.to_dict():
+            if getattr(self, key) is None:
+                try:
+                    self._dirty_attributes.remove(key)
+                except KeyError:
+                    continue
+
     @property
     def brand(self):
         """
@@ -2662,6 +3125,13 @@ class System(BaseObject):
         for key, value in kwargs.items():
             setattr(self, key, value)
 
+        for key in self.to_dict():
+            if getattr(self, key) is None:
+                try:
+                    self._dirty_attributes.remove(key)
+                except KeyError:
+                    continue
+
 
 class Tag(BaseObject):
     def __init__(self, api=None, count=None, name=None, **kwargs):
@@ -2672,6 +3142,86 @@ class Tag(BaseObject):
 
         for key, value in kwargs.items():
             setattr(self, key, value)
+
+        for key in self.to_dict():
+            if getattr(self, key) is None:
+                try:
+                    self._dirty_attributes.remove(key)
+                except KeyError:
+                    continue
+
+
+class Target(BaseObject):
+    def __init__(self,
+                 api=None,
+                 active=None,
+                 content_type=None,
+                 created_at=None,
+                 id=None,
+                 method=None,
+                 password=None,
+                 target_url=None,
+                 title=None,
+                 type=None,
+                 url=None,
+                 username=None,
+                 **kwargs):
+
+        self.api = api
+
+        # Comment: Whether or not the target is activated
+        # Mandatory:
+        # Type: boolean
+        self.active = active
+        self.content_type = content_type
+
+        # Comment: The time the target was created
+        # Mandatory:
+        # Type: date
+        self.created_at = created_at
+
+        # Comment: Automatically assigned when created
+        # Mandatory:
+        # Type: integer
+        self.id = id
+        self.method = method
+        self.password = password
+        self.target_url = target_url
+
+        # Comment: A name for the target
+        # Mandatory: yes
+        # Type: string
+        self.title = title
+
+        # Comment: A pre-defined target, such as "basecamp_target". See the additional attributes for the type that follow
+        # Mandatory:
+        # Type: string
+        self.type = type
+        self.url = url
+        self.username = username
+
+        for key, value in kwargs.items():
+            setattr(self, key, value)
+
+        for key in self.to_dict():
+            if getattr(self, key) is None:
+                try:
+                    self._dirty_attributes.remove(key)
+                except KeyError:
+                    continue
+
+    @property
+    def created(self):
+        """
+        |  Comment: The time the target was created
+        """
+        if self.created_at:
+            return dateutil.parser.parse(self.created_at)
+
+    @created.setter
+    def created(self, created):
+        if created:
+            self.created_at = created
 
 
 class Thumbnail(BaseObject):
@@ -2693,6 +3243,13 @@ class Thumbnail(BaseObject):
 
         for key, value in kwargs.items():
             setattr(self, key, value)
+
+        for key in self.to_dict():
+            if getattr(self, key) is None:
+                try:
+                    self._dirty_attributes.remove(key)
+                except KeyError:
+                    continue
 
 
 class Ticket(BaseObject):
@@ -2903,6 +3460,13 @@ class Ticket(BaseObject):
         for key, value in kwargs.items():
             setattr(self, key, value)
 
+        for key in self.to_dict():
+            if getattr(self, key) is None:
+                try:
+                    self._dirty_attributes.remove(key)
+                except KeyError:
+                    continue
+
     @property
     def assignee(self):
         """
@@ -2970,20 +3534,6 @@ class Ticket(BaseObject):
     def due(self, due):
         if due:
             self.due_at = due
-
-    @property
-    def external(self):
-        """
-        |  Comment: An id you can use to link Zendesk Support tickets to local records
-        """
-        if self.api and self.external_id:
-            return self.api._get_external(self.external_id)
-
-    @external.setter
-    def external(self, external):
-        if external:
-            self.external_id = external.id
-            self._external = external
 
     @property
     def forum_topic(self):
@@ -3107,6 +3657,13 @@ class TicketAudit(BaseObject):
         for key, value in kwargs.items():
             setattr(self, key, value)
 
+        for key in self.to_dict():
+            if getattr(self, key) is None:
+                try:
+                    self._dirty_attributes.remove(key)
+                except KeyError:
+                    continue
+
 
 class TicketEvent(BaseObject):
     def __init__(self,
@@ -3129,6 +3686,13 @@ class TicketEvent(BaseObject):
 
         for key, value in kwargs.items():
             setattr(self, key, value)
+
+        for key in self.to_dict():
+            if getattr(self, key) is None:
+                try:
+                    self._dirty_attributes.remove(key)
+                except KeyError:
+                    continue
 
     @property
     def timestamp(self):
@@ -3316,6 +3880,13 @@ class TicketField(BaseObject):
         for key, value in kwargs.items():
             setattr(self, key, value)
 
+        for key in self.to_dict():
+            if getattr(self, key) is None:
+                try:
+                    self._dirty_attributes.remove(key)
+                except KeyError:
+                    continue
+
     @property
     def created(self):
         """
@@ -3466,6 +4037,13 @@ class TicketForm(BaseObject):
 
         for key, value in kwargs.items():
             setattr(self, key, value)
+
+        for key in self.to_dict():
+            if getattr(self, key) is None:
+                try:
+                    self._dirty_attributes.remove(key)
+                except KeyError:
+                    continue
 
     @property
     def created(self):
@@ -3691,6 +4269,13 @@ class TicketMetric(BaseObject):
         for key, value in kwargs.items():
             setattr(self, key, value)
 
+        for key in self.to_dict():
+            if getattr(self, key) is None:
+                try:
+                    self._dirty_attributes.remove(key)
+                except KeyError:
+                    continue
+
     @property
     def assigned(self):
         """
@@ -3833,6 +4418,13 @@ class TicketMetricItem(BaseObject):
         for key, value in kwargs.items():
             setattr(self, key, value)
 
+        for key in self.to_dict():
+            if getattr(self, key) is None:
+                try:
+                    self._dirty_attributes.remove(key)
+                except KeyError:
+                    continue
+
 
 class TicketSharingEvent(BaseObject):
     def __init__(self,
@@ -3852,17 +4444,12 @@ class TicketSharingEvent(BaseObject):
         for key, value in kwargs.items():
             setattr(self, key, value)
 
-    @property
-    def agreement(self):
-
-        if self.api and self.agreement_id:
-            return self.api._get_agreement(self.agreement_id)
-
-    @agreement.setter
-    def agreement(self, agreement):
-        if agreement:
-            self.agreement_id = agreement.id
-            self._agreement = agreement
+        for key in self.to_dict():
+            if getattr(self, key) is None:
+                try:
+                    self._dirty_attributes.remove(key)
+                except KeyError:
+                    continue
 
 
 class Topic(BaseObject):
@@ -3904,6 +4491,13 @@ class Topic(BaseObject):
 
         for key, value in kwargs.items():
             setattr(self, key, value)
+
+        for key in self.to_dict():
+            if getattr(self, key) is None:
+                try:
+                    self._dirty_attributes.remove(key)
+                except KeyError:
+                    continue
 
     @property
     def created(self):
@@ -3964,6 +4558,56 @@ class Topic(BaseObject):
             self._updater = updater
 
 
+class Trigger(BaseObject):
+    def __init__(self,
+                 api=None,
+                 actions=None,
+                 active=None,
+                 conditions=None,
+                 description=None,
+                 id=None,
+                 position=None,
+                 title=None,
+                 **kwargs):
+
+        self.api = api
+
+        # Comment: An object describing what the trigger will do
+        # Type: :class:`Actions`
+        self.actions = actions
+
+        # Comment: Whether the trigger is active
+        # Type: boolean
+        self.active = active
+
+        # Comment: An object that describes the conditions under which the trigger will execute
+        # Type: :class:`Conditions`
+        self.conditions = conditions
+        self.description = description
+
+        # Comment: Automatically assigned when created
+        # Type: integer
+        self.id = id
+
+        # Comment: Position of the trigger, determines the order they will execute in
+        # Type: integer
+        self.position = position
+
+        # Comment: The title of the trigger
+        # Type: string
+        self.title = title
+
+        for key, value in kwargs.items():
+            setattr(self, key, value)
+
+        for key in self.to_dict():
+            if getattr(self, key) is None:
+                try:
+                    self._dirty_attributes.remove(key)
+                except KeyError:
+                    continue
+
+
 class TweetEvent(BaseObject):
     def __init__(self,
                  api=None,
@@ -3984,6 +4628,13 @@ class TweetEvent(BaseObject):
         for key, value in kwargs.items():
             setattr(self, key, value)
 
+        for key in self.to_dict():
+            if getattr(self, key) is None:
+                try:
+                    self._dirty_attributes.remove(key)
+                except KeyError:
+                    continue
+
 
 class Upload(BaseObject):
     def __init__(self,
@@ -4002,6 +4653,13 @@ class Upload(BaseObject):
 
         for key, value in kwargs.items():
             setattr(self, key, value)
+
+        for key in self.to_dict():
+            if getattr(self, key) is None:
+                try:
+                    self._dirty_attributes.remove(key)
+                except KeyError:
+                    continue
 
     @property
     def expires(self):
@@ -4256,6 +4914,13 @@ class User(BaseObject):
         for key, value in kwargs.items():
             setattr(self, key, value)
 
+        for key in self.to_dict():
+            if getattr(self, key) is None:
+                try:
+                    self._dirty_attributes.remove(key)
+                except KeyError:
+                    continue
+
     @property
     def created(self):
         """
@@ -4282,20 +4947,6 @@ class User(BaseObject):
         if custom_role:
             self.custom_role_id = custom_role.id
             self._custom_role = custom_role
-
-    @property
-    def external(self):
-        """
-        |  Comment: A unique id you can specify for the user
-        """
-        if self.api and self.external_id:
-            return self.api._get_external(self.external_id)
-
-    @external.setter
-    def external(self, external):
-        if external:
-            self.external_id = external.id
-            self._external = external
 
     @property
     def last_login(self):
@@ -4439,6 +5090,13 @@ class UserField(BaseObject):
         for key, value in kwargs.items():
             setattr(self, key, value)
 
+        for key in self.to_dict():
+            if getattr(self, key) is None:
+                try:
+                    self._dirty_attributes.remove(key)
+                except KeyError:
+                    continue
+
     @property
     def created(self):
         """
@@ -4496,6 +5154,13 @@ class UserRelated(BaseObject):
         for key, value in kwargs.items():
             setattr(self, key, value)
 
+        for key in self.to_dict():
+            if getattr(self, key) is None:
+                try:
+                    self._dirty_attributes.remove(key)
+                except KeyError:
+                    continue
+
 
 class Via(BaseObject):
     def __init__(self, api=None, source=None, **kwargs):
@@ -4505,6 +5170,13 @@ class Via(BaseObject):
 
         for key, value in kwargs.items():
             setattr(self, key, value)
+
+        for key in self.to_dict():
+            if getattr(self, key) is None:
+                try:
+                    self._dirty_attributes.remove(key)
+                except KeyError:
+                    continue
 
 
 class View(BaseObject):
@@ -4581,6 +5253,13 @@ class View(BaseObject):
         for key, value in kwargs.items():
             setattr(self, key, value)
 
+        for key in self.to_dict():
+            if getattr(self, key) is None:
+                try:
+                    self._dirty_attributes.remove(key)
+                except KeyError:
+                    continue
+
     @property
     def created(self):
         """
@@ -4648,6 +5327,13 @@ class ViewCount(BaseObject):
         for key, value in kwargs.items():
             setattr(self, key, value)
 
+        for key in self.to_dict():
+            if getattr(self, key) is None:
+                try:
+                    self._dirty_attributes.remove(key)
+                except KeyError:
+                    continue
+
     @property
     def view(self):
 
@@ -4688,6 +5374,13 @@ class ViewRow(BaseObject):
 
         for key, value in kwargs.items():
             setattr(self, key, value)
+
+        for key in self.to_dict():
+            if getattr(self, key) is None:
+                try:
+                    self._dirty_attributes.remove(key)
+                except KeyError:
+                    continue
 
     @property
     def group(self):
@@ -4747,6 +5440,13 @@ class VoiceCommentEvent(BaseObject):
 
         for key, value in kwargs.items():
             setattr(self, key, value)
+
+        for key in self.to_dict():
+            if getattr(self, key) is None:
+                try:
+                    self._dirty_attributes.remove(key)
+                except KeyError:
+                    continue
 
     @property
     def author(self):
