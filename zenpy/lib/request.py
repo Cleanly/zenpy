@@ -1,10 +1,7 @@
 import collections
 import os
-from abc import abstractmethod
 
-from zenpy.lib.api_objects import BaseObject, Ticket
 from zenpy.lib.api_objects.chat_objects import Shortcut, Trigger
-from zenpy.lib.cache import delete_from_cache
 from zenpy.lib.endpoint import EndpointFactory
 from zenpy.lib.exception import ZenpyException
 from zenpy.lib.util import get_object_type, as_plural, is_iterable_but_not_string
@@ -20,17 +17,14 @@ class RequestHandler(object):
     def __init__(self, api):
         self.api = api
 
-    @abstractmethod
     def put(self, api_objects, *args, **kwargs):
-        pass
+        raise NotImplementedError("PUT is not implemented!")
 
-    @abstractmethod
     def post(self, api_objects, *args, **kwargs):
-        pass
+        raise NotImplementedError("POST is not implemented!")
 
-    @abstractmethod
     def delete(self, api_objects, *args, **kwargs):
-        pass
+        raise NotImplementedError("DELETE is not implemented!")
 
 
 class BaseZendeskRequest(RequestHandler):
@@ -117,17 +111,8 @@ class CRUDRequest(BaseZendeskRequest):
         payload = self.build_payload(api_objects)
         url = self.api._build_url(self.api.endpoint(*args, **kwargs))
         response = self.api._delete(url, payload=payload)
-        delete_from_cache(api_objects)
+        self.api.cache.delete(api_objects)
         return response
-
-
-class DynamicContentRequest(CRUDRequest):
-    def build_payload(self, api_objects):
-        if isinstance(api_objects, collections.Iterable):
-            payload_key = 'items'
-        else:
-            payload_key = 'item'
-        return {payload_key: self.api._serialize(api_objects)}
 
 
 class SuspendedTicketRequest(BaseZendeskRequest):
@@ -161,7 +146,7 @@ class SuspendedTicketRequest(BaseZendeskRequest):
         payload = self.build_payload(tickets)
         url = self.api._build_url(self.api.endpoint(**endpoint_kwargs))
         response = self.api._delete(url, payload=payload)
-        delete_from_cache(tickets)
+        self.api.cache.delete(tickets)
         return response
 
 
@@ -222,7 +207,7 @@ class UserIdentityRequest(BaseZendeskRequest):
 class UploadRequest(RequestHandler):
     """ Handles uploading files to Zendesk. """
 
-    def post(self, fp, token=None, target_name=None):
+    def post(self, fp, token=None, target_name=None, content_type=None):
         if hasattr(fp, 'read'):
             # File-like objects such as:
             #   PY3: io.StringIO, io.TextIOBase, io.BufferedIOBase
@@ -246,7 +231,7 @@ class UploadRequest(RequestHandler):
             raise ZenpyException("upload requires a target file name")
 
         url = self.api._build_url(self.api.endpoint.upload(filename=target_name, token=token))
-        return self.api._post(url, data=fp, payload={})
+        return self.api._post(url, data=fp, payload={}, content_type=content_type)
 
     def put(self, api_objects, *args, **kwargs):
         raise NotImplementedError("POST is not implemented fpr UploadRequest!")
@@ -304,6 +289,55 @@ class SatisfactionRatingRequest(BaseZendeskRequest):
 
     def delete(self, api_objects, *args, **kwargs):
         raise NotImplementedError("DELETE is not implemented fpr SatisfactionRequest!")
+
+
+class OrganizationFieldReorderRequest(RequestHandler):
+
+    def put(self, api_objects, *args, **kwargs):
+        payload = {'organization_field_ids': api_objects}
+        url = self.api._build_url(self.api.endpoint.reorder())
+        return self.api._put(url, payload=payload)
+
+
+class TicketFieldOptionRequest(BaseZendeskRequest):
+
+    def post(self, ticket_field, custom_field_option):
+        cfo_id = getattr(custom_field_option, 'id', None)
+        if cfo_id is not None:
+            url = self.api._build_url(self.api.endpoint.update(id=ticket_field))
+        else:
+            url = self.api._build_url(self.api.endpoint(id=ticket_field))
+        return self.api._post(url, payload=self.build_payload(custom_field_option))
+
+    def delete(self, ticket_field, custom_field_option):
+        url = self.api._build_url(self.api.endpoint.delete(ticket_field, custom_field_option))
+        return self.api._delete(url)
+
+
+class VariantRequest(BaseZendeskRequest):
+    def post(self, item, variant):
+        if isinstance(variant, collections.Iterable):
+            endpoint = self.api.endpoint.create_many
+        else:
+            endpoint = self.api.endpoint
+        url = self.api._build_url(endpoint(item))
+        payload = self.build_payload(variant)
+        return self.api._post(url, payload=payload)
+
+    def put(self, item, variant):
+        if isinstance(variant, collections.Iterable):
+            url = self.api._build_url(self.api.endpoint.update_many(id=item))
+        else:
+            url = self.api._build_url(self.api.endpoint.update(item, variant.id))
+
+        payload = self.build_payload(variant)
+        return self.api._put(url, payload=payload)
+
+    def delete(self, item, variant):
+        url = self.api._build_url(self.api.endpoint.delete(item, variant))
+        deleted = self.api._delete(url)
+        delete_from_cache(deleted)
+        return deleted
 
 
 class ChatApiRequest(RequestHandler):

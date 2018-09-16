@@ -5,7 +5,6 @@ from zenpy.lib.api_objects import *
 from zenpy.lib.api_objects.chat_objects import *
 from zenpy.lib.api_objects.help_centre_objects import Article, Category, Section, Label, Translation, Topic, Post, \
     Subscription, Vote, AccessPolicy, UserSegment
-from zenpy.lib.cache import add_to_cache
 from zenpy.lib.exception import ZenpyException
 from zenpy.lib.proxy import ProxyDict, ProxyList
 from zenpy.lib.util import as_singular, get_object_type
@@ -22,6 +21,7 @@ class ZendeskObjectMapping(object):
     class_mapping = {
         'ticket': Ticket,
         'user': User,
+        'deleted_user': User,
         'organization': Organization,
         'group': Group,
         'brand': Brand,
@@ -59,7 +59,7 @@ class ZendeskObjectMapping(object):
         'activity': Activity,
         'group_membership': GroupMembership,
         'ticket_metric': TicketMetric,
-        'ticket_metric_event': TicketMetric,
+        'ticket_metric_event': TicketMetricEvent,
         'status': Status,
         'ticket_metric_item': TicketMetricItem,
         'user_field': UserField,
@@ -89,9 +89,13 @@ class ZendeskObjectMapping(object):
         'response': Response,
         'trigger': zenpy.lib.api_objects.Trigger,
         'automation': Automation,
-        'dynamic_content_item': DynamicContent,
+        'item': Item,
         'target': Target,
-        'locale': Locale
+        'locale': Locale,
+        'custom_field_option': CustomFieldOption,
+        'variant': Variant,
+        'link': Link,
+        'skip': Skip
     }
 
     skip_attrs = []
@@ -101,7 +105,9 @@ class ZendeskObjectMapping(object):
         self.api = api
         self.skip_attrs = ['user_fields', 'organization_fields']
         self.always_dirty = dict(
-            conditions=('all', 'any')
+            conditions=('all', 'any'),
+            organization_field=('custom_field_options',),
+            ticket_field=('custom_field_options',)
         )
 
     def object_from_json(self, object_type, object_json, parent=None):
@@ -123,7 +129,7 @@ class ZendeskObjectMapping(object):
             setattr(obj, key, value)
         if hasattr(obj, '_clean_dirty'):
             obj._clean_dirty()
-        add_to_cache(obj)
+        self.api.cache.add(obj)
         return obj
 
     def instantiate_object(self, object_type, parent):

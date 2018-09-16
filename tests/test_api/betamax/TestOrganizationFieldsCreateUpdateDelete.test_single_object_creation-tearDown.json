@@ -1,11 +1,11 @@
 {
   "http_interactions": [
     {
-      "recorded_at": "2018-08-05T02:58:11",
+      "recorded_at": "2018-07-07T06:57:05",
       "request": {
         "body": {
           "encoding": "utf-8",
-          "string": "{\"ticket\": {\"id\": 6793}}"
+          "string": "{\"organization_field\": {\"id\": 360000188631}}"
         },
         "headers": {
           "Accept": [
@@ -15,13 +15,13 @@
             "gzip, deflate"
           ],
           "Authorization": [
-            "Basic c2luayt6ZW5kZXNrQGZhY2V0b2UuY29tLmF1L3Rva2VuOnZZaWRJVlJiVUdsekRqRVVUNjNVeURWTmt3MGVPSHIxRFptRE5pNnM="
+            "Basic c2luayt6ZW5kZXNrQGZhY2V0b2UuY29tLmF1L3Rva2VuOnlHeUd3VHJsYnZNc3JhU0dnOFowTE1tQUw2MXNoVlVCS2JmQlRFeUc="
           ],
           "Connection": [
             "keep-alive"
           ],
           "Content-Length": [
-            "24"
+            "44"
           ],
           "Content-Type": [
             "application/json"
@@ -31,7 +31,7 @@
           ]
         },
         "method": "DELETE",
-        "uri": "https://d3v-zenpydev.zendesk.com/api/v2/tickets/6793.json"
+        "uri": "https://d3v-zenpydev.zendesk.com/api/v2/organization_fields/360000188631.json"
       },
       "response": {
         "body": {
@@ -46,7 +46,7 @@
             "keep-alive"
           ],
           "Date": [
-            "Sun, 05 Aug 2018 02:58:20 GMT"
+            "Sat, 07 Jul 2018 06:57:07 GMT"
           ],
           "Server": [
             "nginx"
@@ -64,35 +64,35 @@
             "700"
           ],
           "X-Rate-Limit-Remaining": [
-            "698"
+            "697"
           ],
           "X-Request-Id": [
-            "50f7ea3f291ad79d957fad75f1a349ef"
+            "ed730cb5fd5119a6fedddb02770ae4b3"
           ],
           "X-Runtime": [
-            "0.253350"
+            "0.200640"
           ],
           "X-Zendesk-API-Version": [
             "v2"
           ],
           "X-Zendesk-API-Warn": [
-            "Removed restricted keys [\"ticket.id\", \"ticket\"] from parameters according to whitelist"
+            "Removed restricted keys [\"organization_field.id\", \"organization_field\"] from parameters according to whitelist"
           ],
           "X-Zendesk-Application-Version": [
-            "v1989.15"
+            "v1673.37"
           ],
           "X-Zendesk-Origin-Server": [
-            "app21.pod13.usw2.zdsys.com"
+            "app50.pod13.usw2.zdsys.com"
           ],
           "X-Zendesk-Request-Id": [
-            "ec1f0549673cfde8c13c"
+            "86966db84d6e077596fa"
           ]
         },
         "status": {
           "code": 204,
           "message": "No Content"
         },
-        "url": "https://d3v-zenpydev.zendesk.com/api/v2/tickets/6793.json"
+        "url": "https://d3v-zenpydev.zendesk.com/api/v2/organization_fields/360000188631.json"
       }
     }
   ],

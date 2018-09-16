@@ -1,6 +1,6 @@
 import logging
-from datetime import datetime
 from datetime import date
+from datetime import datetime
 
 from zenpy.lib.exception import ZenpyException
 from zenpy.lib.util import is_iterable_but_not_string, to_unix_ts
@@ -92,6 +92,8 @@ class PrimaryEndpoint(BaseEndpoint):
             elif key == 'count_many':
                 path += '/count_many.json'
                 parameters[key] = ",".join(map(str, value))
+            elif key == 'external_id' and path == 'tickets':
+                parameters[key] = value
             elif key in ('external_id', 'external_ids'):
                 external_ids = [value] if not is_iterable_but_not_string(value) else value
                 path += '/show_many.json'
@@ -115,6 +117,8 @@ class PrimaryEndpoint(BaseEndpoint):
                     parameters[key] = ",".join(value)
                 elif value:
                     parameters[key] = value
+            elif key in ('since_id', 'ticket_id', 'issue_id'):  # Jira integration
+                parameters[key] = value
 
             # this is a bit of a hack
             elif key == 'role':
@@ -129,10 +133,8 @@ class PrimaryEndpoint(BaseEndpoint):
 
 
 class SecondaryEndpoint(BaseEndpoint):
-    def __call__(self, **kwargs):
-        if not kwargs:
-            raise ZenpyException("This endpoint requires arguments!")
-        return Url(self.endpoint % kwargs)
+    def __call__(self, id, include=None):
+        return Url(self.endpoint % dict(id=id), params=dict(include=include) if include else None)
 
 
 class MultipleIDEndpoint(BaseEndpoint):
@@ -402,7 +404,14 @@ class EndpointFactory(object):
     chats.visitors = ChatEndpoint('visitors')
     chats.search = ChatSearchEndpoint('chats/search')
     chats.stream = ChatSearchEndpoint('stream/chats')
-    dynamic_content_items = PrimaryEndpoint('dynamic_content/items')
+    dynamic_contents = PrimaryEndpoint('dynamic_content/items')
+    dynamic_contents.variants = SecondaryEndpoint('dynamic_content/items/%(id)s/variants.json')
+    dynamic_contents.variants.show = MultipleIDEndpoint('dynamic_content/items/{}/variants/{}.json')
+    dynamic_contents.variants.create = SecondaryEndpoint('dynamic_content/items/%(id)s/variants.json')
+    dynamic_contents.variants.create_many = SecondaryEndpoint('dynamic_content/items/%(id)s/variants/create_many.json')
+    dynamic_contents.variants.update = MultipleIDEndpoint('dynamic_content/items/{}/variants/{}.json')
+    dynamic_contents.variants.update_many = SecondaryEndpoint('dynamic_content/items/%(id)s/variants/update_many.json')
+    dynamic_contents.variants.delete = MultipleIDEndpoint('dynamic_content/items/{}/variants/{}.json')
     end_user = SecondaryEndpoint('end_users/%(id)s.json')
     group_memberships = PrimaryEndpoint('group_memberships')
     group_memberships.assignable = PrimaryEndpoint('group_memberships/assignable')
@@ -410,8 +419,10 @@ class EndpointFactory(object):
     groups = PrimaryEndpoint('groups')
     groups.memberships = SecondaryEndpoint('groups/%(id)s/memberships.json')
     groups.memberships_assignable = SecondaryEndpoint('groups/%(id)s/memberships/assignable.json')
+    groups.users = SecondaryEndpoint('groups/%(id)s/users.json')
     job_statuses = PrimaryEndpoint('job_statuses')
     locales = PrimaryEndpoint('locales')
+    links = PrimaryEndpoint('services/jira/links')
     macros = MacroEndpoint('macros')
     macros.apply = SecondaryEndpoint('macros/%(id)s/apply.json')
 
@@ -419,6 +430,8 @@ class EndpointFactory(object):
     nps.recipients_incremental = IncrementalEndpoint('nps/incremental/recipients.json')
     nps.responses_incremental = IncrementalEndpoint('nps/incremental/responses.json')
     organization_memberships = PrimaryEndpoint('organization_memberships')
+    organization_fields = PrimaryEndpoint('organization_fields')
+    organization_fields.reorder = PrimaryEndpoint('organization_fields/reorder.json')
     organizations = PrimaryEndpoint('organizations')
     organizations.external = SecondaryEndpoint('organizations/search.json?external_id=%(id)s')
     organizations.incremental = IncrementalEndpoint('incremental/organizations.json')
@@ -427,6 +440,7 @@ class EndpointFactory(object):
     organizations.requests = SecondaryEndpoint('organizations/%(id)s/requests.json')
     organizations.tags = SecondaryEndpoint('organizations/%(id)s/tags.json')
     organizations.create_or_update = PrimaryEndpoint('organizations/create_or_update')
+    organizations.users = SecondaryEndpoint('organizations/%(id)s/users.json')
     requests = PrimaryEndpoint('requests')
     requests.ccd = PrimaryEndpoint("requests/ccd")
     requests.comments = SecondaryEndpoint('requests/%(id)s/comments.json')
@@ -439,11 +453,16 @@ class EndpointFactory(object):
     sharing_agreements = PrimaryEndpoint('sharing_agreements')
     sla_policies = PrimaryEndpoint('slas/policies')
     sla_policies.definitions = PrimaryEndpoint('slas/policies/definitions')
+    skips = PrimaryEndpoint('skips')
     suspended_tickets = PrimaryEndpoint('suspended_tickets')
     suspended_tickets.recover = SecondaryEndpoint('suspended_tickets/%(id)s/recover.json')
     tags = PrimaryEndpoint('tags')
     targets = PrimaryEndpoint('targets')
     ticket_fields = PrimaryEndpoint('ticket_fields')
+    ticket_field_options = SecondaryEndpoint('ticket_fields/%(id)s/options.json')
+    ticket_field_options.show = MultipleIDEndpoint('ticket_fields/{}/options/{}.json')
+    ticket_field_options.update = SecondaryEndpoint('ticket_fields/%(id)s/options.json')
+    ticket_field_options.delete = MultipleIDEndpoint('ticket_fields/{}/options/{}.json')
     ticket_forms = PrimaryEndpoint('ticket_forms')
     ticket_import = PrimaryEndpoint('imports/tickets')
     ticket_metrics = PrimaryEndpoint('ticket_metrics')
@@ -460,6 +479,7 @@ class EndpointFactory(object):
     tickets.tags = SecondaryEndpoint('tickets/%(id)s/tags.json')
     tickets.macro = MultipleIDEndpoint('tickets/{0}/macros/{1}/apply.json')
     tickets.merge = SecondaryEndpoint('tickets/%(id)s/merge.json')
+    tickets.skips = SecondaryEndpoint('tickets/%(id)s/skips.json')
     topics = PrimaryEndpoint('topics')
     topics.tags = SecondaryEndpoint('topics/%(id)s/tags.json')
     triggers = PrimaryEndpoint('triggers')
@@ -470,6 +490,7 @@ class EndpointFactory(object):
     users.create_or_update = PrimaryEndpoint('users/create_or_update')
     users.create_or_update_many = PrimaryEndpoint('users/create_or_update_many.json')
     users.group_memberships = SecondaryEndpoint('users/%(id)s/group_memberships.json')
+    users.deleted = PrimaryEndpoint("deleted_users")
     users.groups = SecondaryEndpoint('users/%(id)s/groups.json')
     users.incremental = IncrementalEndpoint('incremental/users.json')
     users.me = PrimaryEndpoint('users/me')
@@ -487,6 +508,7 @@ class EndpointFactory(object):
     users.identities.verify = MultipleIDEndpoint('users/{0}/identities/{1}/verify')
     users.identities.request_verification = MultipleIDEndpoint('users/{0}/identities/{1}/request_verification.json')
     users.identities.delete = MultipleIDEndpoint('users/{0}/identities/{1}.json')
+    users.skips = SecondaryEndpoint('users/%(id)s/skips.json')
     views = PrimaryEndpoint('views')
     views.active = PrimaryEndpoint('views/active')
     views.compact = PrimaryEndpoint('views/compact')

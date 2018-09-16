@@ -2,43 +2,41 @@
 
 import json
 import logging
-from datetime import datetime, date
-from json import JSONEncoder
-
 from time import sleep, time
 
-from zenpy.lib.api_objects import User, Macro, Identity, View, Organization, Group, GroupMembership
-from zenpy.lib.api_objects.help_centre_objects import Section, Article, Comment, ArticleAttachment, Label, Category, \
-    Translation, Topic, Post, Subscription
-from zenpy.lib.cache import query_cache
+from zenpy.lib.api_objects import (
+    User,
+    Macro,
+    Identity,
+    View,
+    Organization,
+    Group,
+    GroupMembership,
+    OrganizationField,
+    TicketField,
+    CustomFieldOption,
+    Item, Variant, Ticket, BaseObject)
+from zenpy.lib.api_objects.help_centre_objects import (
+    Section,
+    Article,
+    Comment,
+    ArticleAttachment,
+    Label,
+    Category,
+    Translation,
+    Topic,
+    Post,
+    Subscription
+)
 from zenpy.lib.exception import *
 from zenpy.lib.mapping import ZendeskObjectMapping, ChatObjectMapping, HelpCentreObjectMapping
-from zenpy.lib.proxy import ProxyList, ProxyDict
 from zenpy.lib.request import *
 from zenpy.lib.response import *
-from zenpy.lib.util import as_plural, extract_id, is_iterable_but_not_string
+from zenpy.lib.util import as_plural, extract_id, is_iterable_but_not_string, json_encode_for_zendesk
 
 __author__ = 'facetoe'
 
 log = logging.getLogger(__name__)
-
-
-class ZenpyObjectEncoder(JSONEncoder):
-    """ Class for encoding API objects"""
-
-    def default(self, o):
-        if hasattr(o, 'to_dict'):
-            return o.to_dict(serialize=True)
-        elif isinstance(o, datetime):
-            return o.date().isoformat()
-        elif isinstance(o, date):
-            return o.isoformat()
-        elif isinstance(o, ProxyDict):
-            return dict(o)
-        elif isinstance(o, ProxyList):
-            return list(o)
-        elif is_iterable_but_not_string(o):
-            return list(o)
 
 
 class BaseApi(object):
@@ -47,13 +45,14 @@ class BaseApi(object):
     rate limiting and deserializing responses.
     """
 
-    def __init__(self, subdomain, session, timeout, ratelimit, ratelimit_budget):
+    def __init__(self, subdomain, session, timeout, ratelimit, ratelimit_budget, ratelimit_request_interval, cache):
         self.domain = 'zendesk.com'
         self.subdomain = subdomain
         self.session = session
         self.timeout = timeout
         self.ratelimit = ratelimit
         self.ratelimit_budget = ratelimit_budget
+        self.cache = cache
         self.protocol = 'https'
         self.api_prefix = 'api/v2'
         self._url_template = "%(protocol)s://%(subdomain)s.zendesk.com/%(api_prefix)s"
@@ -61,6 +60,7 @@ class BaseApi(object):
             'lastcalltime': None,
             'lastlimitremaining': None
         }
+        self.ratelimit_request_interval = ratelimit_request_interval
         self._response_handlers = (
             DeleteResponseHandler,
             TagResponseHandler,
@@ -69,7 +69,6 @@ class BaseApi(object):
             ViewResponseHandler,
             SlaPolicyResponseHandler,
             RequestCommentResponseHandler,
-            DynamicContentResponseHandler,
             GenericZendeskResponseHandler,
             HTTPOKResponseHandler,
         )
@@ -78,8 +77,14 @@ class BaseApi(object):
         # is successfully processed, and then call the objects _clean_dirty() method.
         self._dirty_object = None
 
-    def _post(self, url, payload, **kwargs):
-        headers = {'Content-Type': 'application/octet-stream'} if 'data' in kwargs else None
+    def _post(self, url, payload, content_type=None, **kwargs):
+        if 'data' in kwargs:
+            if content_type:
+                headers = {'Content-Type': content_type}
+            else:
+                headers = {'Content-Type': 'application/octet-stream'}
+        else:
+            headers = None
         response = self._call_api(self.session.post, url,
                                   json=self._serialize(payload),
                                   timeout=self.timeout,
@@ -161,16 +166,17 @@ class BaseApi(object):
 
         lastlimitremaining = self.callsafety['lastlimitremaining']
 
-        if time_since_last_call() is None or time_since_last_call() >= 10 or lastlimitremaining >= self.ratelimit:
+        if time_since_last_call() is None or time_since_last_call() >= self.ratelimit_request_interval or \
+                lastlimitremaining >= self.ratelimit:
             response = http_method(url, **kwargs)
         else:
-            # We hit our limit floor and aren't quite at 10 seconds yet..
+            # We hit our limit floor and aren't quite at ratelimit_request_interval value in seconds yet..
             log.warn(
-                "Safety Limit Reached of %s remaining calls and time since last call is under 10 seconds"
-                % self.ratelimit
+                "Safety Limit Reached of %s remaining calls and time since last call is under %s seconds"
+                % (self.ratelimit, self.ratelimit_request_interval)
             )
-            while time_since_last_call() < 10:
-                remaining_sleep = int(10 - time_since_last_call())
+            while time_since_last_call() < self.ratelimit_request_interval:
+                remaining_sleep = int(self.ratelimit_request_interval - time_since_last_call())
                 log.debug("  -> sleeping: %s more seconds" % remaining_sleep)
                 sleep(1)
             response = http_method(url, **kwargs)
@@ -213,10 +219,8 @@ class BaseApi(object):
 
         log.debug("Cleaning objects: {}".format(self._dirty_object))
         for o in self._dirty_object:
-            if not isinstance(o, BaseObject):
-                log.warning("Non-zenpy object found in _dirty_object list {}. This should never happen!".format(o))
-                continue
-            o._clean_dirty()
+            if isinstance(o, BaseObject):
+                o._clean_dirty()
         self._dirty_object = None
 
     def _serialize(self, zenpy_object):
@@ -225,7 +229,7 @@ class BaseApi(object):
         if not type(zenpy_object) == dict:
             log.debug("Setting dirty object: {}".format(zenpy_object))
             self._dirty_object = zenpy_object
-        return json.loads(json.dumps(zenpy_object, cls=ZenpyObjectEncoder))
+        return json.loads(json.dumps(zenpy_object, default=json_encode_for_zendesk))
 
     def _query_zendesk(self, endpoint, object_type, *endpoint_args, **endpoint_kwargs):
         """
@@ -243,7 +247,7 @@ class BaseApi(object):
 
         _id = endpoint_kwargs.get('id', None)
         if _id:
-            item = query_cache(object_type, _id)
+            item = self.cache.get(object_type, _id)
             if item:
                 return item
             else:
@@ -254,7 +258,7 @@ class BaseApi(object):
             # If we are missing even one we request them all again.
             # This could be optimized to only request the missing objects.
             for _id in endpoint_kwargs['ids']:
-                obj = query_cache(object_type, _id)
+                obj = self.cache.get(object_type, _id)
                 if obj:
                     cached_objects.append(obj)
                 else:
@@ -654,58 +658,64 @@ class UserApi(IncrementalApi, CRUDExternalApi, TaggableApi):
         self.identities = UserIdentityApi(config)
 
     @extract_id(User)
-    def groups(self, user):
+    def groups(self, user, include=None):
         """
         Retrieve the groups for this user.
 
+        :param include: https://developer.zendesk.com/rest_api/docs/core/side_loading
         :param user: User object or id
         """
-        return self._query_zendesk(self.endpoint.groups, 'group', id=user)
+        return self._query_zendesk(self.endpoint.groups, 'group', id=user, include=include)
 
     @extract_id(User)
-    def organizations(self, user):
+    def organizations(self, user, include=None):
         """
         Retrieve the organizations for this user.
 
+        :param include: https://developer.zendesk.com/rest_api/docs/core/side_loading
         :param user: User object or id
         """
-        return self._query_zendesk(self.endpoint.organizations, 'organization', id=user)
+        return self._query_zendesk(self.endpoint.organizations, 'organization', id=user, include=include)
 
     @extract_id(User)
-    def requested(self, user):
+    def requested(self, user, include=None):
         """
         Retrieve the requested tickets for this user.
 
+        :param include: https://developer.zendesk.com/rest_api/docs/core/side_loading
         :param user: User object or id
         """
-        return self._query_zendesk(self.endpoint.requested, 'ticket', id=user)
+        return self._query_zendesk(self.endpoint.requested, 'ticket', id=user, include=include)
 
     @extract_id(User)
-    def cced(self, user):
+    def cced(self, user, include=None):
         """
         Retrieve the tickets this user is cc'd into.
 
+        :param include: https://developer.zendesk.com/rest_api/docs/core/side_loading
         :param user: User object or id
         """
-        return self._query_zendesk(self.endpoint.cced, 'ticket', id=user)
+        return self._query_zendesk(self.endpoint.cced, 'ticket', id=user, include=include)
 
     @extract_id(User)
-    def assigned(self, user):
+    def assigned(self, user, include=None):
         """
         Retrieve the assigned tickets for this user.
 
+        :param include: https://developer.zendesk.com/rest_api/docs/core/side_loading
         :param user: User object or id
         """
-        return self._query_zendesk(self.endpoint.assigned, 'ticket', id=user)
+        return self._query_zendesk(self.endpoint.assigned, 'ticket', id=user, include=include)
 
     @extract_id(User)
-    def group_memberships(self, user):
+    def group_memberships(self, user, include=None):
         """
         Retrieve the group memberships for this user.
 
+        :param include: https://developer.zendesk.com/rest_api/docs/core/side_loading
         :param user: User object or id
         """
-        return self._query_zendesk(self.endpoint.group_memberships, 'group_membership', id=user)
+        return self._query_zendesk(self.endpoint.group_memberships, 'group_membership', id=user, include=include)
 
     def requests(self, **kwargs):
         return self._query_zendesk(self.endpoint.requests, 'request', **kwargs)
@@ -768,6 +778,34 @@ class UserApi(IncrementalApi, CRUDExternalApi, TaggableApi):
 
         return CRUDRequest(self).post(users, create_or_update=True)
 
+    @extract_id(User)
+    def permanently_delete(self, user):
+        """
+        Permanently delete user - https://developer.zendesk.com/rest_api/docs/core/users#permanently-delete-user
+
+        :param user: User object or id
+        """
+        url = self._build_url(self.endpoint.deleted(id=user))
+        deleted_user = self._delete(url)
+        self.cache.delete(deleted_user)
+        return deleted_user
+
+    def deleted(self):
+        """
+        List Deleted Users.
+
+        These are users that have been deleted but not permanently yet.
+        See Permanently delete user - https://developer.zendesk.com/rest_api/docs/core/users#permanently-delete-user
+        """
+        return self._get(self._build_url(self.endpoint.deleted()))
+
+    @extract_id(User)
+    def skips(self, user):
+        """
+        Skips for user (https://developer.zendesk.com/rest_api/docs/core/ticket_skips)
+        """
+        return self._get(self._build_url(self.endpoint.skips(id=user)))
+
 
 class AttachmentApi(Api):
     def __init__(self, config):
@@ -778,7 +816,7 @@ class AttachmentApi(Api):
             raise ZenpyException("Attachment endpoint requires an id")
         return Api.__call__(self, **kwargs)
 
-    def upload(self, fp, token=None, target_name=None):
+    def upload(self, fp, token=None, target_name=None, content_type=None):
         """
         Upload a file to Zendesk.
 
@@ -789,7 +827,7 @@ class AttachmentApi(Api):
         :return: :class:`Upload` object containing a token and other information
                     (see https://developer.zendesk.com/rest_api/docs/core/attachments#uploading-files)
         """
-        return UploadRequest(self).post(fp, token=token, target_name=target_name)
+        return UploadRequest(self).post(fp, token=token, target_name=target_name, content_type=content_type)
 
     def download(self, attachment_id, destination):
         """
@@ -843,6 +881,10 @@ class OrganizationApi(TaggableApi, IncrementalApi, CRUDExternalApi):
         super(OrganizationApi, self).__init__(config, object_type='organization')
 
     @extract_id(Organization)
+    def users(self, organization, include=None):
+        return self._get(self._build_url(self.endpoint.users(id=organization, include=include)))
+
+    @extract_id(Organization)
     def organization_fields(self, organization):
         """
         Retrieve the organization fields for this organization.
@@ -860,13 +902,14 @@ class OrganizationApi(TaggableApi, IncrementalApi, CRUDExternalApi):
         """
         return self._query_zendesk(self.endpoint.organization_memberships, 'organization_membership', id=organization)
 
-    def external(self, external_id):
+    def external(self, external_id, include=None):
         """
         Locate an Organization by it's external_id attribute.
 
+        :param include: https://developer.zendesk.com/rest_api/docs/core/side_loading
         :param external_id: external id of organization
         """
-        return self._query_zendesk(self.endpoint.external, 'organization', id=external_id)
+        return self._query_zendesk(self.endpoint.external, 'organization', id=external_id, include=include)
 
     def requests(self, **kwargs):
         return self._query_zendesk(self.endpoint.requests, 'request', **kwargs)
@@ -893,6 +936,19 @@ class OrganizationMembershipApi(CRUDApi):
 
     def update(self, items, **kwargs):
         raise ZenpyException("You cannot update Organization Memberships!")
+
+
+class OrganizationFieldsApi(CRUDApi):
+    def __init__(self, config):
+        super(OrganizationFieldsApi, self).__init__(config, object_type='organization_field')
+
+    @extract_id(OrganizationField)
+    def reorder(self, organization_fields):
+        """
+        Reorder organization fields.
+        :param organization_fields: list of OrganizationField objects or ids in the desired order.
+        """
+        return OrganizationFieldReorderRequest(self).put(organization_fields)
 
 
 class SatisfactionRatingApi(Api):
@@ -934,19 +990,20 @@ class TicketApi(RateableApi, TaggableApi, IncrementalApi, CRUDApi):
         super(TicketApi, self).__init__(config, object_type='ticket')
 
     @extract_id(Organization)
-    def organizations(self, organization):
+    def organizations(self, organization, include=None):
         """
         Retrieve the tickets for this organization.
 
+        :param include: https://developer.zendesk.com/rest_api/docs/core/side_loading
         :param organization: Organization object or id
         """
-        return self._query_zendesk(self.endpoint.organizations, 'ticket', id=organization)
+        return self._query_zendesk(self.endpoint.organizations, 'ticket', id=organization, include=include)
 
-    def recent(self):
+    def recent(self, include=None):
         """
         Retrieve the most recent tickets
         """
-        return self._query_zendesk(self.endpoint.recent, 'ticket', id=None)
+        return self._query_zendesk(self.endpoint.recent, 'ticket', id=None, include=include)
 
     @extract_id(Ticket)
     def comments(self, ticket):
@@ -957,16 +1014,17 @@ class TicketApi(RateableApi, TaggableApi, IncrementalApi, CRUDApi):
         """
         return self._query_zendesk(self.endpoint.comments, 'comment', id=ticket)
 
-    def events(self, start_time):
+    def events(self, start_time, include=None):
         """
         Retrieve TicketEvents
 
+        :param include: https://developer.zendesk.com/rest_api/docs/core/side_loading
         :param start_time: time to retrieve events from.
         """
-        return self._query_zendesk(self.endpoint.events, 'ticket_event', start_time=start_time)
+        return self._query_zendesk(self.endpoint.events, 'ticket_event', start_time=start_time, include=include)
 
     @extract_id(Ticket)
-    def audits(self, ticket=None, **kwargs):
+    def audits(self, ticket=None, include=None, **kwargs):
         """
         Retrieve TicketAudits. If ticket is passed, return the tickets for a specific audit.
 
@@ -983,12 +1041,13 @@ class TicketApi(RateableApi, TaggableApi, IncrementalApi, CRUDApi):
 
         See the Zendesk docs for information on additional parameters - https://developer.zendesk.com/rest_api/docs/core/ticket_audits#pagination
 
+        :param include: https://developer.zendesk.com/rest_api/docs/core/side_loading
         :param ticket: Ticket object or id
         """
         if ticket is not None:
-            return self._query_zendesk(self.endpoint.audits, 'ticket_audit', id=ticket)
+            return self._query_zendesk(self.endpoint.audits, 'ticket_audit', id=ticket, include=include)
         else:
-            return self._query_zendesk(self.endpoint.audits.cursor, 'ticket_audit', **kwargs)
+            return self._query_zendesk(self.endpoint.audits.cursor, 'ticket_audit', include=include, **kwargs)
 
     @extract_id(Ticket)
     def metrics(self, ticket):
@@ -1015,7 +1074,9 @@ class TicketApi(RateableApi, TaggableApi, IncrementalApi, CRUDApi):
         """
 
         url = self._build_url(self.endpoint.macro(ticket, macro))
-        return self._get(url)
+        macro_effect = self._get(url)
+        macro_effect._set_dirty()
+        return macro_effect
 
     @extract_id(Ticket)
     def merge(self, target, source,
@@ -1034,6 +1095,27 @@ class TicketApi(RateableApi, TaggableApi, IncrementalApi, CRUDApi):
                                              target_comment=target_comment,
                                              source_comment=source_comment)
 
+    @extract_id(Ticket)
+    def skips(self, ticket):
+        """
+        Skips for ticket (https://developer.zendesk.com/rest_api/docs/core/ticket_skips)
+        """
+
+        return self._get(self._build_url(self.endpoint.skips(id=ticket)))
+
+
+class SkipApi(CRUDApi):
+    def __init__(self, config):
+        super(SkipApi, self).__init__(config,
+                                      object_type='skip',
+                                      endpoint=EndpointFactory('skips'))
+
+    def delete(self, api_objects, **kwargs):
+        raise NotImplementedError("Cannot delete Skip objects")
+
+    def update(self, api_objects, **kwargs):
+        raise NotImplementedError("Cannot update Skip objects")
+
 
 class TicketImportAPI(CRUDApi):
     def __init__(self, config):
@@ -1051,8 +1133,107 @@ class TicketImportAPI(CRUDApi):
         raise ZenpyException("You cannot delete objects using the ticket_import endpoint!")
 
 
+class TicketCustomFieldOptionApi(Api):
+
+    def __init__(self, config):
+        super(TicketCustomFieldOptionApi, self).__init__(config,
+                                                         object_type='custom_field_option',
+                                                         endpoint=EndpointFactory('ticket_field_options'))
+
+    @extract_id(TicketField, CustomFieldOption)
+    def show(self, ticket_field, custom_field_option):
+        """
+        Return CustomFieldOption
+
+        :param ticket_field: TicketFieldOption or id
+        :param custom_field_option: CustomFieldOption or id
+        """
+        return self._query_zendesk(self.endpoint.show, 'custom_field_option', ticket_field, custom_field_option)
+
+    @extract_id(TicketField)
+    def create_or_update(self, ticket_field, custom_field_option):
+        """
+        Create or update a CustomFieldOption for a TicketField. If passed CustomFieldOption has no id, a new option
+        will be created, otherwise it is updated - https://developer.zendesk.com/rest_api/docs/core/ticket_fields#create-or-update-a-ticket-field-option.
+
+        :param ticket_field: TicketField object or id
+        :param custom_field_option: CustomFieldOption object
+        """
+        return TicketFieldOptionRequest(self).post(ticket_field, custom_field_option)
+
+    @extract_id(TicketField, CustomFieldOption)
+    def delete(self, ticket_field, custom_field_option):
+        """
+        Delete a CustomFieldOption.
+
+        :param ticket_field: TicketField object or id.
+        :param custom_field_option: CustomFieldOption
+        """
+        return TicketFieldOptionRequest(self).delete(ticket_field, custom_field_option)
+
+
 class TicketFieldApi(CRUDApi):
-    pass
+
+    def __init__(self, config):
+        super(TicketFieldApi, self).__init__(config, 'ticket_field')
+        self.options = TicketCustomFieldOptionApi(config)
+
+
+class VariantApi(Api):
+    def __init__(self, config, endpoint):
+        super(VariantApi, self).__init__(config,
+                                         object_type='variant',
+                                         endpoint=endpoint)
+
+    @extract_id(Item, Variant)
+    def show(self, item, variant):
+        """
+        Show a variant.
+
+        :param item: Item object or id
+        :param variant: Variant object or id
+        :return:
+        """
+        url = self._build_url(self.endpoint.show(item, variant))
+        return self._get(url)
+
+    @extract_id(Item)
+    def create(self, item, variant):
+        """
+        Create one or more variants.
+
+        :param item: Item object or id
+        :param variant: Variant object or list of objects
+        """
+        return VariantRequest(self).post(item, variant)
+
+    @extract_id(Item)
+    def update(self, item, variant):
+        """
+        Update one or more variants.
+
+        :param item: Item object or id
+        :param variant: Variant object or list of objects
+        """
+        return VariantRequest(self).put(item, variant)
+
+    @extract_id(Item, Variant)
+    def delete(self, item, variant):
+        """
+        Delete a variant.
+
+        :param item: Item object or id
+        :param variant: Variant object or id
+        """
+        return VariantRequest(self).delete(item, variant)
+
+
+class DynamicContentApi(CRUDApi):
+    def __init__(self, config):
+        super(DynamicContentApi, self).__init__(config,
+                                                object_type='item',
+                                                endpoint=EndpointFactory('dynamic_contents'))
+        self.variants = VariantApi(config, endpoint=self.endpoint.variants)
 
 
 class TriggerApi(CRUDApi):
@@ -1061,11 +1242,6 @@ class TriggerApi(CRUDApi):
 
 class AutomationApi(CRUDApi):
     pass
-
-
-class DynamicContentApi(CRUDApi):
-    def create(self, api_objects, **kwargs):
-        return DynamicContentRequest(self).post(api_objects)
 
 
 class TargetApi(CRUDApi):
@@ -1129,85 +1305,96 @@ class GroupApi(CRUDApi):
         super(GroupApi, self).__init__(config, object_type='group')
 
     @extract_id(Group)
-    def memberships(self, group):
+    def users(self, group, include=None):
+        return self._get(self._build_url(self.endpoint.users(id=group, include=include)))
+
+    @extract_id(Group)
+    def memberships(self, group, include=None):
         """
         Return the GroupMemberships for this group
 
+        :param include: https://developer.zendesk.com/rest_api/docs/core/side_loading
         :param group: Group object or id
         """
-        return self._get(self._build_url(self.endpoint.memberships(id=group)))
+        return self._get(self._build_url(self.endpoint.memberships(id=group, include=include)))
 
     @extract_id(Group)
-    def memberships_assignable(self, group):
+    def memberships_assignable(self, group, include=None):
         """
         Return memberships that are assignable for this group.
 
+        :param include: https://developer.zendesk.com/rest_api/docs/core/side_loading
         :param group: Group object or id
         """
-        return self._get(self._build_url(self.endpoint.memberships_assignable(id=group)))
+        return self._get(self._build_url(self.endpoint.memberships_assignable(id=group, include=include)))
 
 
 class ViewApi(CRUDApi):
     def __init__(self, config):
         super(ViewApi, self).__init__(config, object_type='view')
 
-    def active(self):
+    def active(self, include=None):
         """
         Return all active views.
         """
-        return self._get(self._build_url(self.endpoint.active()))
+        return self._get(self._build_url(self.endpoint.active(include=include)))
 
-    def compact(self):
+    def compact(self, include=None):
         """
         Return compact views - https://developer.zendesk.com/rest_api/docs/core/views#list-views---compact
         """
-        return self._get(self._build_url(self.endpoint.compact()))
+        return self._get(self._build_url(self.endpoint.compact(include=include)))
 
     @extract_id(View)
-    def execute(self, view):
+    def execute(self, view, include=None):
         """
         Execute a view.
 
+        :param include: https://developer.zendesk.com/rest_api/docs/core/side_loading
         :param view: View or view id
         """
-        return self._get(self._build_url(self.endpoint.execute(id=view)))
+        return self._get(self._build_url(self.endpoint.execute(id=view, include=include)))
 
     @extract_id(View)
-    def tickets(self, view, **kwargs):
+    def tickets(self, view, include=None, **kwargs):
         """
         Return the tickets in a view.
 
+        :param include: Optionally include more data. See https://developer.zendesk.com/rest_api/docs/core/side_loading
         :param view: View or view id
         """
-        return self._get(self._build_url(self.endpoint.tickets(id=view)), **kwargs)
+        return self._get(self._build_url(self.endpoint.tickets(id=view, include=include)), **kwargs)
 
     @extract_id(View)
-    def count(self, view):
+    def count(self, view, include=None):
         """
         Return a ViewCount for a view.
 
+        :param include: https://developer.zendesk.com/rest_api/docs/core/side_loading
         :param view: View or view id
         """
-        return self._get(self._build_url(self.endpoint.count(id=view)))
+        return self._get(self._build_url(self.endpoint.count(id=view, include=include)))
 
     @extract_id(View)
-    def count_many(self, views):
+    def count_many(self, views, include=None):
         """
         Return many ViewCounts.
 
+        :param include: https://developer.zendesk.com/rest_api/docs/core/side_loading
         :param views: iterable of View or view ids
         """
-        return self._get(self._build_url(self.endpoint(count_many=views)))
+        return self._get(self._build_url(self.endpoint(count_many=views, include=include)))
 
     @extract_id(View)
-    def export(self, view):
+    def export(self, view, include=None):
         """
         Export a view. Returns an Export object.
 
+        :param include: https://developer.zendesk.com/rest_api/docs/core/side_loading
         :param view: View or view id
         :return:
         """
-        return self._get(self._build_url(self.endpoint.export(id=view)))
+        return self._get(self._build_url(self.endpoint.export(id=view, include=include)))
 
     def search(self, *args, **kwargs):
         """
@@ -1245,6 +1432,15 @@ class GroupMembershipApi(CRUDApi):
         :param group_membership: GroupMembership object or id
         """
         return self._put(self._build_url(self.endpoint.make_default(user, group_membership)), payload={})
+
+
+class JiraLinkApi(CRUDApi):
+    def __init__(self, config):
+        super(JiraLinkApi, self).__init__(config, object_type='link')
+        self.api_prefix = "api"
+
+    def update(self, api_objects, **kwargs):
+        raise ZenpyException("Cannot update Jira Links!")
 
 
 class SlaPolicyApi(CRUDApi):

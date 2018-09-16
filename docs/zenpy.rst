@@ -331,15 +331,19 @@ Rate Limiting
 
 Zendesk imposes rate limiting (https://developer.zendesk.com/rest_api/docs/core/introduction#rate-limits). By default Zenpy will detect this and wait the required period before trying again, however for some use cases this is not desirable. Zenpy offers two additional configuration options to control rate limiting:
 
-1.  `ratelimit`
+1.  `proactive_ratelimit`
 
-    If you wish to avoid ever hitting the rate limit you can set the `ratelimit` parameter when instantiating Zenpy:
+    If you wish to avoid ever hitting the rate limit you can set the `proactive_ratelimit` parameter when instantiating Zenpy:
 
     .. code:: python
 
-        zenpy_client = Zenpy(ratelimit=20, **creds)
+        zenpy_client = Zenpy(proactive_ratelimit_request_interval=20, **creds)
 
-2.  `ratelimit_budget`
+2. `proactive_ratelimit_request_interval`
+
+    When utilizing the `proactive_ratelimit` feature, you can also specify how long to wait when you are over your `proactive_ratelimit`.
+
+3.  `ratelimit_budget`
 
     If you have a maximum amount of time you are willing to wait for rate limiting, you can set the `ratelimit_budget` parameter. This budget is decremented for every second spent being rate limited, and when the budget is spent throws a RatelimitBudgetExceeded exception. For example, if you wish to wait no more than 60 seconds:
 
@@ -361,7 +365,7 @@ The code above will not need to generate an additional API call to retrieve the 
 Caching
 ~~~~~~~
 
-:class:`Zenpy` maintains several caches to prevent unecessary API calls.
+:class:`Zenpy` support caching objects to prevent API calls, and each Zenpy instance has it's own set of caches.
 
 If we turn logging on, we can see Zenpy's caching in action. The code:
 
@@ -381,6 +385,25 @@ Outputs:
     DEBUG - Cache HIT: [User 116514121092]
 
 Here we see that only one API call is generated, as the user already existed in the cache after the first call.
+
+This feature is especially useful when combined with "sideloading" (https://developer.zendesk.com/rest_api/docs/core/side_loading). As an example, the following code:
+
+.. code:: python
+
+    ticket = zenpy_client.tickets(id=6569, include='users')
+    print(ticket.requester.name)
+
+Outputs:
+
+::
+
+    DEBUG - Cache MISS: [Ticket 6569]
+    DEBUG - GET: https://d3v-zenpydev.zendesk.com/api/v2/tickets/6569.json?include=users - {'timeout': 60.0}
+    DEBUG - Caching: [Ticket(id=6569)]
+    DEBUG - Caching: [User(id=116514121092)]
+    DEBUG - Cache HIT: [User 116514121092]
+
+We can see that because we "sideloaded" users, an extra API call was not generated when we attempted to access the requester attribute.
 
 Controlling Caching
 -------------------
@@ -415,10 +438,8 @@ By default :class:`Zenpy` caches for following objects:
 * :class:`zenpy.lib.api_objects.UserField`
 * :class:`zenpy.lib.api_objects.Group`
 * :class:`zenpy.lib.api_objects.User`
-* :class:`zenpy.lib.api_objects.OrganizationField`
 * :class:`zenpy.lib.api_objects.Organization`
 * :class:`zenpy.lib.api_objects.Brand`
-* :class:`zenpy.lib.api_objects.TicketField`
 
 
 Zenpy Endpoint Reference
