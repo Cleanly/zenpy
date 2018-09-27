@@ -41,7 +41,7 @@ class BaseResultGenerator(collections.Iterable):
     def next(self):
         if self.values is None:
             self.values = self.process_page()
-        if hasattr(self, 'per_page') and self.per_page == self.position and not getattr(self, 'infinite_iteration', False):
+        if hasattr(self, 'per_page') and self.per_page == self.position:
             raise StopIteration()
         if self.position >= len(self.values):
             self.handle_pagination()
