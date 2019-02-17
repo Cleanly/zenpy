@@ -2,6 +2,8 @@ import logging
 from datetime import date
 from datetime import datetime
 
+from requests.utils import quote
+
 from zenpy.lib.exception import ZenpyException
 from zenpy.lib.util import is_iterable_but_not_string, to_unix_ts
 
@@ -126,6 +128,8 @@ class PrimaryEndpoint(BaseEndpoint):
                     parameters['role[]'] = value
                 else:
                     parameters['role[]'] = value[0] + '&' + "&".join(('role[]={}'.format(role) for role in value[1:]))
+            elif key.endswith('ids'):
+                parameters[key] = ",".join(map(str, value)) #if it looks like a type of unknown id, send it through as such
 
         if path == self.endpoint and not path.endswith('.json'):
             path += '.json'
@@ -253,7 +257,7 @@ class SearchEndpoint(BaseEndpoint):
         search_query = ['%s%s' % (key, value) for (key, value) in renamed_kwargs.items()]
         search_query.extend(modifiers)
         if query is not None:
-            search_query.insert(0, query)
+            search_query.insert(0, quote(query))
         params['query'] = ' '.join(search_query)
 
         return Url(self.endpoint, params)
@@ -365,7 +369,6 @@ class ChatEndpoint(BaseEndpoint):
                 break
         return Url(endpoint_path, params=params)
 
-
 class ChatSearchEndpoint(BaseEndpoint):
     def __call__(self, *args, **kwargs):
         conditions = list()
@@ -449,6 +452,7 @@ class EndpointFactory(object):
     requests.solved = PrimaryEndpoint("requests/solved")
     satisfaction_ratings = SatisfactionRatingEndpoint('satisfaction_ratings')
     satisfaction_ratings.create = SecondaryEndpoint('tickets/%(id)s/satisfaction_rating.json')
+    schedules = PrimaryEndpoint('business_hours/schedules')
     search = SearchEndpoint('search.json')
     sharing_agreements = PrimaryEndpoint('sharing_agreements')
     sla_policies = PrimaryEndpoint('slas/policies')
@@ -501,6 +505,7 @@ class EndpointFactory(object):
     users.requested = SecondaryEndpoint('users/%(id)s/tickets/requested.json')
     users.requests = SecondaryEndpoint('users/%(id)s/requests.json')
     users.tags = SecondaryEndpoint('users/%(id)s/tags.json')
+    users.set_password = SecondaryEndpoint('users/%(id)s/password.json')
     users.identities = SecondaryEndpoint('users/%(id)s/identities.json')
     users.identities.show = MultipleIDEndpoint('users/{0}/identities/{1}.json')
     users.identities.update = MultipleIDEndpoint('users/{0}/identities/{1}.json')
@@ -520,6 +525,14 @@ class EndpointFactory(object):
     recipient_addresses = PrimaryEndpoint('recipient_addresses')
 
     class Dummy(object): pass
+
+    talk = Dummy()
+    talk.current_queue_activity = PrimaryEndpoint('channels/voice/stats/current_queue_activity')
+    talk.agents_activity = PrimaryEndpoint('channels/voice/stats/agents_activity')
+    talk.availability = SecondaryEndpoint('channels/voice/availabilities/%(id)s.json')
+    talk.account_overview = PrimaryEndpoint('channels/voice/stats/account_overview')
+    talk.agents_overview = PrimaryEndpoint('channels/voice/stats/agents_overview')
+    talk.phone_numbers = PrimaryEndpoint('channels/voice/phone_numbers.json')
 
     help_centre = Dummy()
     help_centre.articles = PrimaryEndpoint('help_center/articles')
@@ -569,6 +582,7 @@ class EndpointFactory(object):
     help_centre.categories.delete_translation = SecondaryEndpoint('help_center/translations/%(id)s.json')
 
     help_centre.sections = PrimaryEndpoint('help_center/sections')
+    help_centre.sections.create = SecondaryEndpoint('help_center/categories/%(id)s/sections.json')
     help_centre.sections.articles = SecondaryEndpoint('help_center/sections/%(id)s/articles.json')
     help_centre.sections.translations = SecondaryEndpoint('help_center/sections/%(id)s/translations.json')
     help_centre.sections.create_translation = SecondaryEndpoint('help_center/sections/%(id)s/translations.json')
