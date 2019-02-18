@@ -2,6 +2,7 @@ import logging
 
 import requests
 from requests.adapters import HTTPAdapter
+from requests.packages.urllib3 import Retry
 
 from zenpy.lib.api import (
     UserApi,
@@ -32,7 +33,7 @@ from zenpy.lib.api import (
     BrandApi,
     TicketFormApi,
     OrganizationFieldsApi,
-    JiraLinkApi, SkipApi)
+    JiraLinkApi, SkipApi, TalkApi)
 from zenpy.lib.cache import ZenpyCache, ZenpyCacheManager
 from zenpy.lib.endpoint import EndpointFactory
 from zenpy.lib.exception import ZenpyException
@@ -135,6 +136,7 @@ class Zenpy(object):
         self.automations = AutomationApi(config, object_type='automation')
         self.dynamic_content = DynamicContentApi(config)
         self.targets = TargetApi(config, object_type='target')
+        self.talk = TalkApi(config)
 
     @staticmethod
     def http_adapter_kwargs():
@@ -143,8 +145,13 @@ class Zenpy(object):
         """
 
         return dict(
-            # http://docs.python-requests.org/en/latest/api/?highlight=max_retries#requests.adapters.HTTPAdapter
-            max_retries=3
+            # Transparently retry requests that are safe to retry, with the exception of 429. This is handled
+            # in the Api._call_api() method.
+            max_retries=Retry(
+                total=3,
+                status_forcelist=[r for r in Retry.RETRY_AFTER_STATUS_CODES if r != 429],
+                respect_retry_after_header=False
+            )
         )
 
     def _init_session(self, email, token, oath_token, password, session):

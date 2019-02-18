@@ -28,8 +28,16 @@ from zenpy.lib.api_objects.help_centre_objects import (
     Post,
     Subscription
 )
+from zenpy.lib.api_objects.talk_objects import (
+    CurrentQueueActivity,
+    PhoneNumbers,
+    ShowAvailability,
+    AgentsOverview,
+    AccountOverview,
+    AgentsActivity
+)
 from zenpy.lib.exception import *
-from zenpy.lib.mapping import ZendeskObjectMapping, ChatObjectMapping, HelpCentreObjectMapping
+from zenpy.lib.mapping import ZendeskObjectMapping, ChatObjectMapping, HelpCentreObjectMapping, TalkObjectMapping
 from zenpy.lib.request import *
 from zenpy.lib.response import *
 from zenpy.lib.util import as_plural, extract_id, is_iterable_but_not_string, json_encode_for_zendesk
@@ -178,11 +186,12 @@ class BaseApi(object):
             while time_since_last_call() < self.ratelimit_request_interval:
                 remaining_sleep = int(self.ratelimit_request_interval - time_since_last_call())
                 log.debug("  -> sleeping: %s more seconds" % remaining_sleep)
+                self.check_ratelimit_budget(1)
                 sleep(1)
             response = http_method(url, **kwargs)
 
         self.callsafety['lastcalltime'] = time()
-        self.callsafety['lastlimitremaining'] = response.headers.get('X-Rate-Limit-Remaining', 0)
+        self.callsafety['lastlimitremaining'] = int(response.headers.get('X-Rate-Limit-Remaining', 0))
         return response
 
     def _update_callsafety(self, response):
@@ -411,7 +420,6 @@ class Api(BaseApi):
 
     def _get_default_locale(self, locale_id):
         return self._query_zendesk(EndpointFactory('locales'), 'locale', id=locale_id)
-
 
 class CRUDApi(Api):
     """
@@ -805,6 +813,16 @@ class UserApi(IncrementalApi, CRUDExternalApi, TaggableApi):
         Skips for user (https://developer.zendesk.com/rest_api/docs/core/ticket_skips)
         """
         return self._get(self._build_url(self.endpoint.skips(id=user)))
+
+    @extract_id(User)
+    def set_password(self, user, password):
+        """
+        Sets the password for the passed user - https://developer.zendesk.com/rest_api/docs/support/users#set-a-users-password
+        :param user: User object or id
+        :param password: new password
+        """
+        url = self._build_url(self.endpoint.set_password(id=user))
+        return self._post(url, payload=dict(password=password))
 
 
 class AttachmentApi(Api):
@@ -1733,6 +1751,9 @@ class SectionApi(HelpCentreApiBase, CRUDApi, TranslationApi, SubscriptionApi, Ac
     def articles(self, section):
         return self._query_zendesk(self.endpoint.articles, 'article', id=section)
 
+    def create(self, section):
+        return CRUDRequest(self).post(section, create=True, id=section.category_id)
+
 
 class ArticleAttachmentApi(HelpCentreApiBase, SubscriptionApi):
     @extract_id(Article)
@@ -1752,11 +1773,13 @@ class ArticleAttachmentApi(HelpCentreApiBase, SubscriptionApi):
         return self._query_zendesk(self.endpoint, 'article_attachment', id=attachment)
 
     @extract_id(Article)
-    def create(self, article, attachment, inline=False):
+    def create(self, article, attachment, inline=False, file_name=None, content_type = None):
         return HelpdeskAttachmentRequest(self).post(self.endpoint.create,
                                                     article=article,
                                                     attachment=attachment,
-                                                    inline=inline)
+                                                    inline=inline,
+                                                    file_name=file_name,
+                                                    content_type=content_type)
 
     def create_unassociated(self, attachment, inline=False):
         return HelpdeskAttachmentRequest(self).post(self.endpoint.create_unassociated,
@@ -1860,3 +1883,38 @@ class NpsApi(Api):
         :param start_time: time to retrieve events from.
         """
         return self._query_zendesk(self.endpoint.responses_incremental, 'responses', start_time=start_time)
+
+class TalkApiBase(Api):
+    def __init__(self, config, endpoint, object_type):
+        super(TalkApiBase, self).__init__(config, object_type=object_type, endpoint=endpoint)
+
+        self._object_mapping = TalkObjectMapping(self)
+
+    def _build_url(self, endpoint):
+        return super(TalkApiBase, self)._build_url(endpoint)
+
+class TalkApi(TalkApiBase):
+    def __init__(self, config):
+        super(TalkApi, self).__init__(config, endpoint=EndpointFactory('talk'), object_type='talk')
+
+        self.current_queue_activity = StatsApi(config, self.endpoint.current_queue_activity, object_type='current_queue_activity')
+        self.agents_activity = StatsApi(config, self.endpoint.agents_activity, object_type='agents_activity')
+        self.availability = AvailabilitiesApi(config, self.endpoint.availability, object_type='availability')
+        self.account_overview = StatsApi(config, self.endpoint.account_overview, object_type='account_overview')
+        self.phone_numbers = PhoneNumbersApi(config, self.endpoint.phone_numbers, object_type='phone_numbers')
+        self.agents_overview = StatsApi(config, self.endpoint.agents_overview, object_type='agents_overview')
+
+    def __call__(self, *args, **kwargs):
+        raise NotImplementedError("Cannot directly call the TalkApi!")
+
+class StatsApi(TalkApiBase):
+    def __init__(self, config, endpoint, object_type):
+             super(StatsApi, self).__init__(config, object_type=object_type, endpoint=endpoint)
+
+class AvailabilitiesApi(TalkApiBase):
+    def __init__(self, config, endpoint, object_type):
+             super(AvailabilitiesApi, self).__init__(config, object_type=object_type, endpoint=endpoint)
+
+class PhoneNumbersApi(TalkApiBase):
+    def __init__(self, config, endpoint, object_type):
+             super(PhoneNumbersApi, self).__init__(config, object_type=object_type, endpoint=endpoint)

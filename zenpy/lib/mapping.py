@@ -5,6 +5,7 @@ from zenpy.lib.api_objects import *
 from zenpy.lib.api_objects.chat_objects import *
 from zenpy.lib.api_objects.help_centre_objects import Article, Category, Section, Label, Translation, Topic, Post, \
     Subscription, Vote, AccessPolicy, UserSegment
+from zenpy.lib.api_objects.talk_objects import *
 from zenpy.lib.exception import ZenpyException
 from zenpy.lib.proxy import ProxyDict, ProxyList
 from zenpy.lib.util import as_singular, get_object_type
@@ -95,7 +96,8 @@ class ZendeskObjectMapping(object):
         'custom_field_option': CustomFieldOption,
         'variant': Variant,
         'link': Link,
-        'skip': Skip
+        'skip': Skip,
+        'schedule': Schedule
     }
 
     skip_attrs = []
@@ -107,7 +109,8 @@ class ZendeskObjectMapping(object):
         self.always_dirty = dict(
             conditions=('all', 'any'),
             organization_field=('custom_field_options',),
-            ticket_field=('custom_field_options',)
+            ticket_field=('custom_field_options',),
+            user=('name',)
         )
 
     def object_from_json(self, object_type, object_json, parent=None):
@@ -123,9 +126,11 @@ class ZendeskObjectMapping(object):
             if key not in self.skip_attrs:
                 key, value = self._deserialize(key, obj, value)
             if isinstance(value, dict):
-                value = ProxyDict(value, dirty_callback=getattr(obj, '_dirty_callback', None))
+                value = ProxyDict(value, dirty_callback=getattr(
+                    obj, '_dirty_callback', None))
             elif isinstance(value, list):
-                value = ProxyList(value, dirty_callback=getattr(obj, '_dirty_callback', None))
+                value = ProxyList(value, dirty_callback=getattr(
+                    obj, '_dirty_callback', None))
             setattr(obj, key, value)
         if hasattr(obj, '_clean_dirty'):
             obj._clean_dirty()
@@ -160,12 +165,14 @@ class ZendeskObjectMapping(object):
             if key in self.class_mapping:
                 value = self.object_from_json(key, value, parent=obj)
             elif as_singular(key) in self.class_mapping:
-                value = self.object_from_json(as_singular(key), value, parent=obj)
+                value = self.object_from_json(
+                    as_singular(key), value, parent=obj)
         elif isinstance(value, list) and self.format_key(as_singular(key), parent=obj) in self.class_mapping:
             zenpy_objects = list()
             for item in value:
                 object_type = self.format_key(as_singular(key), parent=obj)
-                zenpy_objects.append(self.object_from_json(object_type, item, parent=obj))
+                zenpy_objects.append(self.object_from_json(
+                    object_type, item, parent=obj))
             value = zenpy_objects
         return key, value
 
@@ -227,4 +234,14 @@ class HelpCentreObjectMapping(ZendeskObjectMapping):
         'vote': Vote,
         'access_policy': AccessPolicy,
         'user_segment': UserSegment
+    }
+
+class TalkObjectMapping(ZendeskObjectMapping):
+    class_mapping = {
+        'account_overview': AccountOverview,
+        'agents_activity': AgentsActivity,
+        'agents_overview': AgentsOverview,
+        'current_queue_activity': CurrentQueueActivity,
+        'phone_numbers': PhoneNumbers,
+        'availability': ShowAvailability
     }
